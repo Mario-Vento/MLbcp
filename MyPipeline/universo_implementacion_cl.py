@@ -7,25 +7,20 @@
 #   - 10_Score_BHV_Troncal (construcción del universo y joins de variables)
 #   - 10_Recableo_variables_score (construcción de hm_scorepreaprobacionapppyme)
 #
-# Parametrizado con MES_VTA (codmes del proceso).
-# El codmes_data (mes de las tablas fuente) = MES_VTA - 1 mes.
+# El codmes_data (mes de las tablas fuente sin desfase) = codmes - 1 mes.
 
-import sys
 import time
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql import functions as F
-from pyspark.sql.types import (
-    IntegerType, DecimalType, DoubleType, StringType, NumericType
-)
+from pyspark.sql.types import IntegerType, DecimalType, DoubleType
 from pyspark.sql.functions import udf, array
-from pyspark.sql.window import Window
 
 
 # ---------------------------------------------------------------------------
-# Helper: calcular codmes anterior (YYYYMM - 1 mes)
+# Helpers de módulo
 # ---------------------------------------------------------------------------
 def _mes_anterior(codmes: int) -> int:
     """Devuelve el YYYYMM correspondiente a codmes - 1 mes."""
@@ -35,21 +30,17 @@ def _mes_anterior(codmes: int) -> int:
 
 
 def _add_codmes_spark(codmes_col_name: str, n: int):
-    """Replica de helpers.py: suma n meses a una columna YYYYMM en Spark."""
+    """Suma n meses a una columna YYYYMM en Spark (réplica de helpers.py)."""
     return F.date_format(
         F.add_months(F.to_date(F.col(codmes_col_name).cast("int"), "yyyyMM"), n),
         "yyyyMM"
     )
 
 
-# ---------------------------------------------------------------------------
-# UDF: max entre columnas (réplica exacta de helpers.py / notebook Sherly)
-# ---------------------------------------------------------------------------
 def _operaciones_max_between_cols(columnas):
-    resultado = 0.0
+    """UDF: max entre columnas (réplica exacta de helpers.py / notebook Sherly)."""
     valor_inicial = float(-999999999999999.0)
     mayor = float(0.0)
-    numero = float(0.0)
     for column in columnas:
         if column is not None and str(column) != "" and str(column).upper() != "NULL":
             numero = float(column)
@@ -58,13 +49,9 @@ def _operaciones_max_between_cols(columnas):
         if numero >= valor_inicial:
             mayor = float(numero)
             valor_inicial = float(numero)
-        elif numero < valor_inicial:
-            mayor = float(valor_inicial)
-        if mayor == -999999999999999.0:
-            resultado = None
         else:
-            resultado = mayor
-    return resultado
+            mayor = float(valor_inicial)
+    return None if mayor == -999999999999999.0 else mayor
 
 
 _max_between_cols_udf = udf(_operaciones_max_between_cols, DoubleType())
@@ -84,36 +71,34 @@ GLOB_DUMMY_LIST = [
 
 
 # ---------------------------------------------------------------------------
-# Capping (clip) de variables — valores extraídos del notebook Troncal de Sherly
-# Formato: (columna_origen, columna_destino, lower, upper)
-# None en lower/upper significa sin límite en ese extremo.
+# Reglas de capping — valores extraídos del notebook Troncal de Sherly
+# Formato: (col_origen, col_destino, lower, upper)  None = sin límite
 # ---------------------------------------------------------------------------
 CAPPING_RULES = [
-    # (col_origen, col_destino, lower, upper)
-    ("MTX_RCC_OTRA_DEUDA__rcc_mto_rdv_max_u3m",                          "MTX_RCC_OTRA_DEUDA__rcc_mto_rdv_max_u3m_cap",                          None,  54058.633),
-    ("CLASI_EXPER_CLI__ctdempleado",                                       "CLASI_EXPER_CLI__ctdempleado_cap",                                       0.0,   203.0),
-    ("MTX_RESUMEN_ACT_PAS__prod_mto_sld_prm_pas_max_min_12_12_rt_u12",   "MTX_RESUMEN_ACT_PAS__prod_mto_sld_prm_pas_max_min_12_12_rt_u12_cap",   None,  88040.516),
-    ("EVOL_CLI_PYM__ctdmaxdiamorau6m",                                    "EVOL_CLI_PYM__ctdmaxdiamorau6m_cap",                                    0.0,   59.0),
-    ("MTX_RESUMEN_SALDO__prod_ctd_sld_act_u1m",                           "MTX_RESUMEN_SALDO__prod_ctd_sld_act_u1m_cap",                           None,  13.0),
-    ("MOD_DEMO__ctdmesantiguedadempsunat",                                 "MOD_DEMO__ctdmesantiguedadempsunat_cap",                                 None,  396.0),
-    ("APP_SCORE_APROB_PYME__utl_3_rl",                                    "APP_SCORE_APROB_PYME__utl_3_rl_cap",                                    0.0,   261.9096),
-    ("MTX_RESUMEN_ACT_PAS__prod_mto_sld_fim_pas_min_24_24_rt_u24",       "MTX_RESUMEN_ACT_PAS__prod_mto_sld_fim_pas_min_24_24_rt_u24_cap",       None,  0.8768666),
-    ("MTX_TRX_CANAL__can_tkt_tmo_tot_sol_min_u12",                        "MTX_TRX_CANAL__can_tkt_tmo_tot_sol_min_u12_cap",                        None,  20916.992),
-    ("MTX_RESUMEN_ACT_PAS__prod_pct_pmtsav_pmact_24_24_rt_u24",          "MTX_RESUMEN_ACT_PAS__prod_pct_pmtsav_pmact_24_24_rt_u24_cap",          None,  19.579279),
-    ("MTX_RESUMEN_ACT_PAS__prod_mto_sld_prm_tsav_max_min_6_6_rt_u6m",   "MTX_RESUMEN_ACT_PAS__prod_mto_sld_prm_tsav_max_min_6_6_rt_u6m_cap",   None,  4771.6816),
-    ("MTX_RESUMEN_ACT_PAS__prod_mto_sld_prm_tsav_med_1_6_rt_u6m",       "MTX_RESUMEN_ACT_PAS__prod_mto_sld_prm_tsav_med_1_6_rt_u6m_cap",       None,  4.0419364),
-    ("MOD_ACT__pctratiomtodecdeudapymertmtopasivoprmu3m",                 "MOD_ACT__pctratiomtodecdeudapymertmtopasivoprmu3m_cap",                 None,  480.26755),
-    ("APP_SCORE_APROB_PYME__edad_fin",                                    "APP_SCORE_APROB_PYME__edad_fin_cap",                                    25.0,  75.0),
-    ("PASIVO_EVOL_SALD_PYM__mtoprmincrvariacionmensualprmvigsolu6m",      "PASIVO_EVOL_SALD_PYM__mtoprmincrvariacionmensualprmvigsolu6m_cap",      None,  211663.56),
-    ("MTX_RESUMEN_ACT_PAS__prod_mto_sld_prm_act_max_min_6_6_rt_u6m",    "MTX_RESUMEN_ACT_PAS__prod_mto_sld_prm_act_max_min_6_6_rt_u6m_cap",    None,  386732.84),
-    ("MTX_RCC_PROD__rcc_tip_cond_mor_max_crnor_max_u6m",                  "MTX_RCC_PROD__rcc_tip_cond_mor_max_crnor_max_u6m_cap",                  None,  469.555),
+    ("MTX_RCC_OTRA_DEUDA__rcc_mto_rdv_max_u3m",                           "MTX_RCC_OTRA_DEUDA__rcc_mto_rdv_max_u3m_cap",                           None, 54058.633),
+    ("CLASI_EXPER_CLI__ctdempleado",                                        "CLASI_EXPER_CLI__ctdempleado_cap",                                        0.0,  203.0),
+    ("MTX_RESUMEN_ACT_PAS__prod_mto_sld_prm_pas_max_min_12_12_rt_u12",    "MTX_RESUMEN_ACT_PAS__prod_mto_sld_prm_pas_max_min_12_12_rt_u12_cap",    None, 88040.516),
+    ("EVOL_CLI_PYM__ctdmaxdiamorau6m",                                     "EVOL_CLI_PYM__ctdmaxdiamorau6m_cap",                                      0.0,  59.0),
+    ("MTX_RESUMEN_SALDO__prod_ctd_sld_act_u1m",                            "MTX_RESUMEN_SALDO__prod_ctd_sld_act_u1m_cap",                             None, 13.0),
+    ("MOD_DEMO__ctdmesantiguedadempsunat",                                  "MOD_DEMO__ctdmesantiguedadempsunat_cap",                                   None, 396.0),
+    ("APP_SCORE_APROB_PYME__utl_3_rl",                                     "APP_SCORE_APROB_PYME__utl_3_rl_cap",                                       0.0,  261.9096),
+    ("MTX_RESUMEN_ACT_PAS__prod_mto_sld_fim_pas_min_24_24_rt_u24",        "MTX_RESUMEN_ACT_PAS__prod_mto_sld_fim_pas_min_24_24_rt_u24_cap",        None, 0.8768666),
+    ("MTX_TRX_CANAL__can_tkt_tmo_tot_sol_min_u12",                         "MTX_TRX_CANAL__can_tkt_tmo_tot_sol_min_u12_cap",                          None, 20916.992),
+    ("MTX_RESUMEN_ACT_PAS__prod_pct_pmtsav_pmact_24_24_rt_u24",           "MTX_RESUMEN_ACT_PAS__prod_pct_pmtsav_pmact_24_24_rt_u24_cap",           None, 19.579279),
+    ("MTX_RESUMEN_ACT_PAS__prod_mto_sld_prm_tsav_max_min_6_6_rt_u6m",    "MTX_RESUMEN_ACT_PAS__prod_mto_sld_prm_tsav_max_min_6_6_rt_u6m_cap",    None, 4771.6816),
+    ("MTX_RESUMEN_ACT_PAS__prod_mto_sld_prm_tsav_med_1_6_rt_u6m",        "MTX_RESUMEN_ACT_PAS__prod_mto_sld_prm_tsav_med_1_6_rt_u6m_cap",        None, 4.0419364),
+    ("MOD_ACT__pctratiomtodecdeudapymertmtopasivoprmu3m",                  "MOD_ACT__pctratiomtodecdeudapymertmtopasivoprmu3m_cap",                   None, 480.26755),
+    ("APP_SCORE_APROB_PYME__edad_fin",                                     "APP_SCORE_APROB_PYME__edad_fin_cap",                                       25.0, 75.0),
+    ("PASIVO_EVOL_SALD_PYM__mtoprmincrvariacionmensualprmvigsolu6m",       "PASIVO_EVOL_SALD_PYM__mtoprmincrvariacionmensualprmvigsolu6m_cap",       None, 211663.56),
+    ("MTX_RESUMEN_ACT_PAS__prod_mto_sld_prm_act_max_min_6_6_rt_u6m",     "MTX_RESUMEN_ACT_PAS__prod_mto_sld_prm_act_max_min_6_6_rt_u6m_cap",     None, 386732.84),
+    ("MTX_RCC_PROD__rcc_tip_cond_mor_max_crnor_max_u6m",                   "MTX_RCC_PROD__rcc_tip_cond_mor_max_crnor_max_u6m_cap",                    None, 469.555),
     ("VIDEVAR_MTX_MORA_POND_CLI_MMGR__mtodeudaclasifriesgofactordsctosolu12", "VIDEVAR_MTX_MORA_POND_CLI_MMGR__mtodeudaclasifriesgofactordsctosolu12_cap", None, 709515.0),
-    ("MOD_ACT__isav_mto_opea_estvta_pym_u6m_rt_max_u12",                  "MOD_ACT__isav_mto_opea_estvta_pym_u6m_rt_max_u12_cap",                  0.0,   1.0),
-    ("MTX_RESUMEN_ACT_PAS__prod_mto_sld_fim_tsav_max_min_12_12_rt_u12",  "MTX_RESUMEN_ACT_PAS__prod_mto_sld_fim_tsav_max_min_12_12_rt_u12_cap",  None,  372685.25),
-    ("MTX_MOV_ABONO_PAS__isav_tkt_opea_trnf_dol_max_u3m",                "MTX_MOV_ABONO_PAS__isav_tkt_opea_trnf_dol_max_u3m_cap",                None,  379400.0),
-    ("MOD_ACT__pctratiomtoopeaprmu6mopecprmu12",                          "MOD_ACT__pctratiomtoopeaprmu6mopecprmu12_cap",                          None,  2.637802),
-    ("MTX_TRX_CANAL_PAGO_TRANSF__can_mto_tmo_tot_pag_bcp_prm_u6m",      "MTX_TRX_CANAL_PAGO_TRANSF__can_mto_tmo_tot_pag_bcp_prm_u6m_cap",      None,  112905.56),
-    ("APP_SCORE_APROB_PYME__atrasomax_crnenr_12_rl",                      "APP_SCORE_APROB_PYME__atrasomax_crnenr_12_rl_cap",                      None,  46.0),
+    ("MOD_ACT__isav_mto_opea_estvta_pym_u6m_rt_max_u12",                   "MOD_ACT__isav_mto_opea_estvta_pym_u6m_rt_max_u12_cap",                    0.0,  1.0),
+    ("MTX_RESUMEN_ACT_PAS__prod_mto_sld_fim_tsav_max_min_12_12_rt_u12",   "MTX_RESUMEN_ACT_PAS__prod_mto_sld_fim_tsav_max_min_12_12_rt_u12_cap",   None, 372685.25),
+    ("MTX_MOV_ABONO_PAS__isav_tkt_opea_trnf_dol_max_u3m",                 "MTX_MOV_ABONO_PAS__isav_tkt_opea_trnf_dol_max_u3m_cap",                 None, 379400.0),
+    ("MOD_ACT__pctratiomtoopeaprmu6mopecprmu12",                           "MOD_ACT__pctratiomtoopeaprmu6mopecprmu12_cap",                            None, 2.637802),
+    ("MTX_TRX_CANAL_PAGO_TRANSF__can_mto_tmo_tot_pag_bcp_prm_u6m",       "MTX_TRX_CANAL_PAGO_TRANSF__can_mto_tmo_tot_pag_bcp_prm_u6m_cap",       None, 112905.56),
+    ("APP_SCORE_APROB_PYME__atrasomax_crnenr_12_rl",                       "APP_SCORE_APROB_PYME__atrasomax_crnenr_12_rl_cap",                        None, 46.0),
 ]
 
 
@@ -123,25 +108,20 @@ class UniversoImplementacion:
     fuente, las une, aplica reemplazo de dummies y capping (clip), selecciona
     las features del modelo y escribe la table_master en Unity Catalog.
 
-    Basado en los notebooks de Sherly:
-      - 10_Score_BHV_Troncal    → universo + joins de variables troncales
-      - 10_Recableo_variables_score → reconstrucción de hm_scorepreaprobacionapppyme
-
-    Parámetros
-    ----------
-    spark : SparkSession
-    mes_vta : int
-        Mes del proceso en formato YYYYMM (codmes del proceso).
-        El codmes_data (mes de tablas fuente sin desfase) = mes_vta - 1.
-    table_master : str
-        Nombre completo de la tabla destino (catalog.schema.tabla).
-    feature_names : list[str]
-        Lista de features del modelo (proveniente de config.FEATURE_NAMES).
-    source_table : str
-        Tabla de portafolio de crédito (hm_portafoliocredito).
+    Parámetros (alineados con notebook 03_load_preparation_data)
+    ------------------------------------------------------------
+    spark        : SparkSession
+    codmes       : int   — mes del proceso en formato YYYYMM
+    src_catalog  : str   — catálogo fuente de tablas LHCL (ej: "catalog_lhcl_prod_bcp")
+    sink_catalog : str   — catálogo destino Unity Catalog  (ej: CATALOG_NAME del config)
+    sink_schema  : str   — schema destino                  (ej: SCHEMA_NAME del config)
+    sink_table   : str   — nombre base de la tabla destino (ej: BASE_NAME_TABLE_MASTER)
+    feature_names: list  — lista de features del modelo (FEATURE_NAMES del config).
+                           Opcional; si no se pasa, el execute() devuelve todas las cols.
+    source_table : str   — tabla portafolio completa (SOURCE_TABLE del config).
+                           Opcional; si no se pasa se construye desde src_catalog.
     """
 
-    # Productos PYME válidos para construir el universo (notebook Troncal Sherly)
     _PRODUCTOS_PYME = [
         'CCOPCV', 'CCOEFT', 'CNEEFT', 'PAGPYM', 'CCOALP', 'CCOFRO',
         'CCOCTB', 'CCORHB', 'CCORHC', 'CCOCTI',
@@ -153,123 +133,115 @@ class UniversoImplementacion:
     def __init__(
         self,
         spark: SparkSession,
-        mes_vta: int,
-        table_master: str,
-        feature_names: list,
-        source_table: str,
+        codmes: int,
+        src_catalog: str,
+        sink_catalog: str,
+        sink_schema: str,
+        sink_table: str,
+        feature_names: list = None,
+        source_table: str = None,
     ):
-        self.spark = spark
-        self.mes_vta = int(mes_vta)
-        self.codmes_data = _mes_anterior(self.mes_vta)   # mes de tablas fuente (sin desfase)
-        self.table_master = table_master
-        self.feature_names = feature_names
-        self.source_table = source_table
+        # --- Atributos principales ---
+        self.spark        = spark
+        self.codmes       = int(codmes)                    # mes del proceso
+        self.codmes_data  = _mes_anterior(self.codmes)     # mes tablas fuente (sin desfase)
+
+        # --- Catálogos y tabla destino ---
+        self.src_catalog  = src_catalog
+        self.sink_catalog = sink_catalog
+        self.sink_schema  = sink_schema
+        self.sink_table   = sink_table
+        self.table_master = f"{sink_catalog}.{sink_schema}.{sink_table}"
+
+        # --- Features y tabla fuente ---
+        self.feature_names = feature_names  # puede ser None → se devuelven todas las cols
+        self.source_table  = (
+            source_table
+            if source_table
+            else f"{src_catalog}.bcp_ddv_adrmmgr_seginfobasesgenerales_vu.hm_portafoliocredito"
+        )
 
     # ------------------------------------------------------------------
     # MÉTODO PRINCIPAL
     # ------------------------------------------------------------------
     def execute(self) -> DataFrame:
         """
-        Ejecuta el pipeline completo:
-          1. Construir universo de clientes PYME
-          2. Construir hm_scorepreaprobacionapppyme (recableo Sherly)
-          3. Leer tablas de variables troncales
-          4. Unir todo al universo
-          5. Reemplazar dummies por NULL
-          6. Aplicar capping (clip)
-          7. Seleccionar features
-          8. Escribir table_master en Unity Catalog
-
-        Returns
-        -------
-        DataFrame : tabla master con las features del modelo.
+        Ejecuta el pipeline completo y ESCRIBE la tabla master en Unity Catalog.
+        Devuelve el DataFrame resultante para que el notebook pueda contar registros.
         """
         print("=" * 70)
         print(f"UniversoImplementacion.execute()")
-        print(f"  mes_vta    : {self.mes_vta}")
-        print(f"  codmes_data: {self.codmes_data}  (mes tablas fuente sin desfase)")
+        print(f"  codmes      : {self.codmes}")
+        print(f"  codmes_data : {self.codmes_data}  (mes tablas fuente sin desfase)")
         print(f"  table_master: {self.table_master}")
         print("=" * 70)
         start = time.time()
 
-        # --- 1. Universo base PYME ---
+        # 1. Universo base PYME
         df_universo = self._build_universo()
         print(f"[1] Universo PYME: {df_universo.count():,} registros")
 
-        # --- 2. Recableo: construir hm_scorepreaprobacionapppyme ---
+        # 2. Recableo: construir variables de hm_scorepreaprobacionapppyme
         df_app_score = self._build_app_score_aprob_pyme(df_universo)
-        print(f"[2] APP_SCORE_APROB_PYME construido: {df_app_score.count():,} registros")
+        print(f"[2] APP_SCORE_APROB_PYME: {df_app_score.count():,} registros")
 
-        # --- 3. Leer tablas de variables troncales (con desfase +1) ---
-        df_mod_demo               = self._read_mod_demo()
-        df_mod_act                = self._read_mod_act()
-        df_videvar_mora_pond      = self._read_videvar_mora_pond()
-        df_pasivo_evol_sald       = self._read_pasivo_evol_sald()
-        df_mtx_rcc_otra_deuda     = self._read_mtx_rcc_otra_deuda()
-        df_clasi_exper_cli        = self._read_clasi_exper_cli()
-        df_evol_cli_pym           = self._read_evol_cli_pym()
-        df_mtx_resumen_saldo      = self._read_mtx_resumen_saldo()
-        df_mtx_resumen_act_pas    = self._read_mtx_resumen_act_pas()
-        df_mtx_mov_abono_pas      = self._read_mtx_mov_abono_pas()
-        df_mtx_mov_cargo_pas      = self._read_mtx_mov_cargo_pas()
-        df_mtx_trx_canal_pago     = self._read_mtx_trx_canal_pago_transf()
-        df_mtx_rcc_prod           = self._read_mtx_rcc_prod()
-        df_mtx_trx_canal          = self._read_mtx_trx_canal()
+        # 3. Lectura de tablas de variables troncales
+        df_mod_demo            = self._read_mod_demo()
+        df_mod_act             = self._read_mod_act()
+        df_videvar_mora_pond   = self._read_videvar_mora_pond()
+        df_pasivo_evol_sald    = self._read_pasivo_evol_sald()
+        df_mtx_rcc_otra_deuda  = self._read_mtx_rcc_otra_deuda()
+        df_clasi_exper_cli     = self._read_clasi_exper_cli()
+        df_evol_cli_pym        = self._read_evol_cli_pym()
+        df_mtx_resumen_saldo   = self._read_mtx_resumen_saldo()
+        df_mtx_resumen_act_pas = self._read_mtx_resumen_act_pas()
+        df_mtx_mov_abono_pas   = self._read_mtx_mov_abono_pas()
+        df_mtx_mov_cargo_pas   = self._read_mtx_mov_cargo_pas()
+        df_mtx_trx_canal_pago  = self._read_mtx_trx_canal_pago_transf()
+        df_mtx_rcc_prod        = self._read_mtx_rcc_prod()
+        df_mtx_trx_canal       = self._read_mtx_trx_canal()
         print("[3] Tablas de variables troncales leídas")
 
-        # --- 4. Joins al universo ---
+        # 4. Join de todas las tablas al universo
         result = self._join_all(
-            df_universo,
-            df_app_score,
-            df_mod_demo,
-            df_mod_act,
-            df_videvar_mora_pond,
-            df_pasivo_evol_sald,
-            df_mtx_rcc_otra_deuda,
-            df_clasi_exper_cli,
-            df_evol_cli_pym,
-            df_mtx_resumen_saldo,
-            df_mtx_resumen_act_pas,
-            df_mtx_mov_abono_pas,
-            df_mtx_mov_cargo_pas,
-            df_mtx_trx_canal_pago,
-            df_mtx_rcc_prod,
-            df_mtx_trx_canal,
+            df_universo, df_app_score, df_mod_demo, df_mod_act,
+            df_videvar_mora_pond, df_pasivo_evol_sald,
+            df_mtx_rcc_otra_deuda, df_clasi_exper_cli,
+            df_evol_cli_pym, df_mtx_resumen_saldo, df_mtx_resumen_act_pas,
+            df_mtx_mov_abono_pas, df_mtx_mov_cargo_pas,
+            df_mtx_trx_canal_pago, df_mtx_rcc_prod, df_mtx_trx_canal,
         )
-        print(f"[4] Join completo: {result.count():,} registros, {len(result.columns)} columnas")
+        print(f"[4] Join completo: {len(result.columns)} columnas")
 
-        # --- 5. Reemplazo de dummies por NULL ---
+        # 5. Reemplazo de dummies por NULL
         result = self._replace_dummies(result)
         print("[5] Dummies reemplazados por NULL")
 
-        # --- 6. Capping (clip) ---
+        # 6. Capping (clip)
         result = self._apply_capping(result)
         print("[6] Capping aplicado")
 
-        # --- 7. Derivar RNG_ACTIVIDAD_ECONOM (si no viene de app_score) ---
+        # 7. RNG_ACTIVIDAD_ECONOM
         result = self._build_rng_actividad_econom(result)
 
-        # --- 8. Seleccionar features + columnas clave ---
-        result = self._select_features(result)
-        print(f"[7] Features seleccionadas: {len(result.columns)} columnas")
+        # 8. Selección de features (si feature_names fue provisto)
+        if self.feature_names:
+            result = self._select_features(result)
+            print(f"[7] Features seleccionadas: {len(result.columns)} columnas")
 
-        # --- 9. Escribir table_master ---
+        # 9. Escritura en Unity Catalog
         self._write_table_master(result)
-        print(f"[8] Table master escrita en: {self.table_master}")
+        print(f"[8] Tabla escrita en: {self.table_master}")
 
         elapsed = time.time() - start
-        print(f"\n✅ UniversoImplementacion.execute() finalizado en {elapsed:.1f}s")
+        print(f"\n✅ execute() finalizado en {elapsed:.1f}s")
         return result
 
     # ------------------------------------------------------------------
-    # PASO 1: Universo base PYME (notebook Troncal Sherly)
+    # PASO 1: Universo base PYME
     # ------------------------------------------------------------------
     def _build_universo(self) -> DataFrame:
-        """
-        Lee hm_portafoliocredito, filtra por productos PYME y mes_vta,
-        y agrega a nivel (codclaveunicocli, codmes).
-        """
-        clientes0 = (
+        return (
             self.spark.table(self.source_table)
             .select(
                 "codmes", "codclaveunicocli",
@@ -278,53 +250,45 @@ class UniversoImplementacion:
             )
             .filter(
                 F.trim(F.col("codproducto")).isin(self._PRODUCTOS_PYME)
-                & (F.col("codmes") == self.mes_vta)
+                & (F.col("codmes") == self.codmes)
                 & F.col("codclaveunicocli").isNotNull()
                 & F.col("codinternocomputacional").isNotNull()
                 & (F.col("ctdmesmaduracion") > 0)
             )
             .distinct()
+            .groupBy("codclaveunicocli", "codmes")
+            .agg(
+                F.max("codinternocomputacional").alias("codinternocomputacional"),
+                F.max("codclavepartycli").alias("codclavepartycli"),
+            )
         )
-
-        universo = clientes0.groupBy("codclaveunicocli", "codmes").agg(
-            F.max("codinternocomputacional").alias("codinternocomputacional"),
-            F.max("codclavepartycli").alias("codclavepartycli"),
-        )
-        return universo
 
     # ------------------------------------------------------------------
     # PASO 2: Recableo — construir hm_scorepreaprobacionapppyme
-    # (notebook Recableo Sherly, pasos 1-17)
     # ------------------------------------------------------------------
     def _build_app_score_aprob_pyme(self, df_universo: DataFrame) -> DataFrame:
-        """
-        Reconstruye las variables de hm_scorepreaprobacionapppyme para mes_vta:
-          - edad_fin, act_eco_fin  (hm_clientepreaprobacionapppyme)
-          - atrasomax_crnenr_12_rl, montoade_act_max6_s_hip_rl,
-            utl_3_rl, meses_activo_sf_bu_ma6_0_ag  (carretera + materialidad)
-        """
-        cd = self.codmes_data  # alias corto
+        cd = self.codmes_data
 
-        # --- 2.1 Tipo de identificación del cliente (PJ vs PN) ---
+        # 2.1 Tipo de identificación
         cliente_prospecto = (
             self.spark.table(
-                "catalog_lhcl_prod_bcp.bcp_ddv_rbmbcapym_modelogestion_vu.hm_clienteprospectopyme"
+                f"{self.src_catalog}.bcp_ddv_rbmbcapym_modelogestion_vu.hm_clienteprospectopyme"
             )
             .filter(F.col("codmes") == cd)
             .select("CODCLAVEUNICOCLI", "tippartyidentificacion")
         )
 
-        # --- 2.2 Relacionados ---
+        # 2.2 Relacionados
         relacionados = (
             self.spark.table(
-                "catalog_lhcl_prod_bcp.bcp_ddv_rbmbcapym_apppyme_vu.hm_relacionadoapppyme"
+                f"{self.src_catalog}.bcp_ddv_rbmbcapym_apppyme_vu.hm_relacionadoapppyme"
             )
             .filter(F.col("codmes") == cd)
             .select("CODCLAVEUNICOCLI", "CODCLAVEUNICOCLIREL", "DESTIPREL", "PCTPARTICIPACIONREL")
             .join(cliente_prospecto, ["CODCLAVEUNICOCLI"], "left_outer")
         )
 
-        # --- 2.3/2.4 Dueño único por cliente ---
+        # 2.3/2.4 Dueño único
         duenios = relacionados.filter(
             F.col("DESTIPREL").isin("DUENIO", "DUENIO P.N.")
         ).select(
@@ -332,7 +296,6 @@ class UniversoImplementacion:
             F.when(F.col("tippartyidentificacion") == "6", "J")
              .otherwise("N").alias("FLGTIPPER"),
         )
-
         duenio_unico = duenios.groupBy("CODCLAVEUNICOCLI").agg(
             F.max(
                 F.when(F.col("FLGTIPPER") == "N", F.col("CODCLAVEUNICOCLI"))
@@ -340,7 +303,7 @@ class UniversoImplementacion:
             ).alias("CODCLAVEUNICOCLIREL")
         )
 
-        # --- 2.5 Marcar FLGRLDUENIO ---
+        # 2.5 FLGRLDUENIO
         relacionados_con_flag = (
             relacionados.alias("A")
             .join(
@@ -359,17 +322,16 @@ class UniversoImplementacion:
                 ).otherwise(0).alias("FLGRELDUENIO"),
             )
         )
-
         relacion_dueno_final = (
             relacionados_con_flag
             .filter(F.col("FLGRELDUENIO") == 1)
             .select("CODCLAVEUNICOCLI", "CODCLAVEUNICOCLIREL")
         )
 
-        # --- 2.6 Universo APP PYME (edad, actividad económica) ---
+        # 2.6 Universo APP PYME (edad, actividad económica)
         universo_apppyme = (
             self.spark.table(
-                "catalog_lhcl_prod_bcp.bcp_ddv_rbmbcapym_apppyme_vu.hm_clientepreaprobacionapppyme"
+                f"{self.src_catalog}.bcp_ddv_rbmbcapym_apppyme_vu.hm_clientepreaprobacionapppyme"
             )
             .filter(F.col("codmes") == cd)
             .select(
@@ -380,10 +342,10 @@ class UniversoImplementacion:
             )
         )
 
-        # --- 2.7 Carretera RCC (hm_matrizdeudorrccproducto) ---
+        # 2.7 Carretera RCC + campo base meses_activo
         carretera_rcc = (
             self.spark.table(
-                "catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matrizdeudorrccproducto"
+                f"{self.src_catalog}.bcp_ddv_matrizvariables_vu.hm_matrizdeudorrccproducto"
             )
             .filter(F.col("codmes") == cd)
             .select(
@@ -396,10 +358,10 @@ class UniversoImplementacion:
             )
         )
 
-        # --- 2.8 Resumen saldo activo/pasivo ---
+        # 2.8 Resumen saldo activo/pasivo
         resumen_saldo = (
             self.spark.table(
-                "catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matrizresumensaldoactivopasivo"
+                f"{self.src_catalog}.bcp_ddv_matrizvariables_vu.hm_matrizresumensaldoactivopasivo"
             )
             .filter(F.col("codmes") == cd)
             .select(
@@ -409,10 +371,10 @@ class UniversoImplementacion:
             )
         )
 
-        # --- 2.9 Materialidad (hm_variablerccmaterialidadapppyme) ---
+        # 2.9 Materialidad
         materialidad = (
             self.spark.table(
-                "catalog_lhcl_prod_bcp.bcp_ddv_rbmbcapym_apppyme_vu.hm_variablerccmaterialidadapppyme"
+                f"{self.src_catalog}.bcp_ddv_rbmbcapym_apppyme_vu.hm_variablerccmaterialidadapppyme"
             )
             .filter(F.col("codmes") == cd)
             .select(
@@ -423,31 +385,25 @@ class UniversoImplementacion:
             )
         )
 
-        # --- 2.10 Carretera completa con materialidad ---
-        carretera_completa = (
+        # 2.10 Carretera completa con materialidad
+        carretera_final = (
             carretera_rcc
             .join(resumen_saldo, ["codclaveunicocli"], "fullouter")
-            .join(materialidad, ["codclaveunicocli"], "fullouter")
+            .join(materialidad,  ["codclaveunicocli"], "fullouter")
+            .select(
+                "codclaveunicocli",
+                F.when(F.col("ATRASOMAX_CRNENR_12_100").isNull(), F.col("ATRASOMAX_CRNENR_12"))
+                 .otherwise(F.col("ATRASOMAX_CRNENR_12_100")).alias("ATRASOMAX_CRNENR_12"),
+                F.when(F.col("SF_NUM_CAL_CPP24_100").isNull(), F.col("SF_NUM_CAL_CPP24"))
+                 .otherwise(F.col("SF_NUM_CAL_CPP24_100")).alias("SF_NUM_CAL_CPP24"),
+                F.when(F.col("MESES_ACTIVO_SF_BU_MA6_100").isNull(), F.col("MESES_ACTIVO_SF_BU_MA6_0_BASE"))
+                 .otherwise(F.col("MESES_ACTIVO_SF_BU_MA6_100")).alias("MESES_ACTIVO_SF_BU_MA6_0"),
+                "MONTOADE_ACT_MAX6_S_HIP",
+                "UTL_3",
+            )
         )
 
-        carretera_final = carretera_completa.select(
-            "codclaveunicocli",
-            # ATRASOMAX: materialidad reemplaza al base si existe
-            F.when(F.col("ATRASOMAX_CRNENR_12_100").isNull(), F.col("ATRASOMAX_CRNENR_12"))
-             .otherwise(F.col("ATRASOMAX_CRNENR_12_100")).alias("ATRASOMAX_CRNENR_12"),
-            # SF_NUM_CAL_CPP24: materialidad reemplaza
-            F.when(F.col("SF_NUM_CAL_CPP24_100").isNull(), F.col("SF_NUM_CAL_CPP24"))
-             .otherwise(F.col("SF_NUM_CAL_CPP24_100")).alias("SF_NUM_CAL_CPP24"),
-            # MESES_ACTIVO_SF_BU_MA6_0: materialidad reemplaza al base
-            F.when(F.col("MESES_ACTIVO_SF_BU_MA6_100").isNull(), F.col("MESES_ACTIVO_SF_BU_MA6_0_BASE"))
-             .otherwise(F.col("MESES_ACTIVO_SF_BU_MA6_100")).alias("MESES_ACTIVO_SF_BU_MA6_0"),
-            # Campos directos sin materialidad
-            "MONTOADE_ACT_MAX6_S_HIP",
-            "UTL_3",
-            "MESES_PMSAVMF_24_100",
-        )
-
-        # --- 2.11 Variables del dueño (_RL) ---
+        # 2.11 Variables del dueño (_RL)
         variables_dueno = (
             relacion_dueno_final
             .join(
@@ -458,8 +414,7 @@ class UniversoImplementacion:
                     F.col("UTL_3").alias("UTL_3_RL"),
                     F.col("MESES_ACTIVO_SF_BU_MA6_0").alias("MESES_ACTIVO_SF_BU_MA6_0_RL"),
                 ),
-                "CODCLAVEUNICOCLIREL",
-                "left_outer",
+                "CODCLAVEUNICOCLIREL", "left_outer",
             )
             .select(
                 "CODCLAVEUNICOCLI",
@@ -470,21 +425,18 @@ class UniversoImplementacion:
             )
         )
 
-        # --- 2.12 Join universo + apppyme + dueño + cliente ---
+        # 2.12 Join universo + apppyme + dueño + cliente (para AG)
         resultado = (
             df_universo
-            .join(universo_apppyme, ["CODCLAVEUNICOCLI"], "left_outer")
-            .join(variables_dueno,  ["CODCLAVEUNICOCLI"], "left_outer")
+            .join(universo_apppyme,   ["CODCLAVEUNICOCLI"], "left_outer")
+            .join(variables_dueno,    ["CODCLAVEUNICOCLI"], "left_outer")
             .join(
-                carretera_final.select(
-                    "codclaveunicocli",
-                    "MESES_ACTIVO_SF_BU_MA6_0",
-                ),
+                carretera_final.select("codclaveunicocli", "MESES_ACTIVO_SF_BU_MA6_0"),
                 ["CODCLAVEUNICOCLI"], "left_outer",
             )
         )
 
-        # --- 2.13 MESES_ACTIVO_SF_BU_MA6_0_AG: PN→cliente, PJ→max(cliente, dueño) ---
+        # 2.13 MESES_ACTIVO_SF_BU_MA6_0_AG: PN→cliente, PJ→max(cliente, dueño)
         resultado = (
             resultado
             .withColumn(
@@ -495,55 +447,41 @@ class UniversoImplementacion:
             )
             .withColumn(
                 "MESES_ACTIVO_SF_BU_MA6_0_AG",
-                F.when(
-                    F.col("TIPPARTYIDENTIFICACION") != "6",
-                    F.col("MESES_ACTIVO_SF_BU_MA6_0"),
-                ).otherwise(F.col("MESES_ACTIVO_SF_BU_MA6_0_AG_raw"))
+                F.when(F.col("TIPPARTYIDENTIFICACION") != "6", F.col("MESES_ACTIVO_SF_BU_MA6_0"))
+                 .otherwise(F.col("MESES_ACTIVO_SF_BU_MA6_0_AG_raw"))
                  .cast(IntegerType()),
             )
         )
 
-        # --- 2.14 Selección y cast final ---
-        resultado = resultado.select(
-            "codclaveunicocli",
-            F.col("EDAD_FIN").cast(IntegerType()).alias("edad_fin"),
-            F.col("ACT_ECO_FIN").alias("act_eco_fin"),
-            F.col("ATRASOMAX_CRNENR_12_RL").cast(IntegerType()).alias("atrasomax_crnenr_12_rl"),
-            F.col("MONTOADE_ACT_MAX6_S_HIP_RL").cast(DecimalType(19, 8)).alias("montoade_act_max6_s_hip_rl"),
-            F.col("UTL_3_RL").cast(DecimalType(23, 6)).alias("utl_3_rl"),
-            F.col("MESES_ACTIVO_SF_BU_MA6_0_AG").cast(IntegerType()).alias("meses_activo_sf_bu_ma6_0_ag"),
-        )
-
-        # --- 2.15 Prefijo de tabla para alinearse con nombres de features ---
+        # 2.14 Selección y cast final + prefijos de tabla
         resultado = (
             resultado
-            .withColumnRenamed("edad_fin",                  "APP_SCORE_APROB_PYME__edad_fin")
-            .withColumnRenamed("act_eco_fin",               "APP_SCORE_APROB_PYME__act_eco_fin")
-            .withColumnRenamed("atrasomax_crnenr_12_rl",    "APP_SCORE_APROB_PYME__atrasomax_crnenr_12_rl")
-            .withColumnRenamed("montoade_act_max6_s_hip_rl","APP_SCORE_APROB_PYME__montoade_act_max6_s_hip_rl")
-            .withColumnRenamed("utl_3_rl",                  "APP_SCORE_APROB_PYME__utl_3_rl")
-            .withColumnRenamed("meses_activo_sf_bu_ma6_0_ag","APP_SCORE_APROB_PYME__meses_activo_sf_bu_ma6_0_ag")
+            .select(
+                "codclaveunicocli",
+                F.col("EDAD_FIN").cast(IntegerType()).alias("APP_SCORE_APROB_PYME__edad_fin"),
+                F.col("ACT_ECO_FIN").alias("APP_SCORE_APROB_PYME__act_eco_fin"),
+                F.col("ATRASOMAX_CRNENR_12_RL").cast(IntegerType()).alias("APP_SCORE_APROB_PYME__atrasomax_crnenr_12_rl"),
+                F.col("MONTOADE_ACT_MAX6_S_HIP_RL").cast(DecimalType(19, 8)).alias("APP_SCORE_APROB_PYME__montoade_act_max6_s_hip_rl"),
+                F.col("UTL_3_RL").cast(DecimalType(23, 6)).alias("APP_SCORE_APROB_PYME__utl_3_rl"),
+                F.col("MESES_ACTIVO_SF_BU_MA6_0_AG").cast(IntegerType()).alias("APP_SCORE_APROB_PYME__meses_activo_sf_bu_ma6_0_ag"),
+            )
         )
 
-        # Limpiar dummies en el resultado del recableo
+        # 2.15 Limpieza de dummies en el resultado del recableo
         cols = resultado.columns
-        resultado = resultado.select(*[
+        return resultado.select(*[
             F.when(F.col(c).isin(GLOB_DUMMY_LIST), None).otherwise(F.col(c)).alias(c)
             for c in cols
         ])
-        return resultado
 
     # ------------------------------------------------------------------
-    # PASO 3: Lectura de tablas de variables troncales
-    # Todas con desfase +1 (codmes_data → mes_vta)
+    # PASO 3: Lectura de tablas troncales (todas con desfase +1)
     # ------------------------------------------------------------------
-
-    def _read_with_offset(self, table: str, key_col: str, cols: dict, filter_extra=None) -> DataFrame:
+    def _read_with_offset(self, table: str, key_col: str, cols: dict,
+                          filter_extra=None) -> DataFrame:
         """
-        Lee una tabla, aplica filtro por codmes_data, renombra columnas
-        según 'cols' {nombre_origen: nombre_destino} y aplica desfase +1.
-
-        El DataFrame resultante tiene 'codmes' = mes_vta.
+        Lee tabla, filtra por codmes_data, renombra columnas y aplica desfase +1.
+        El df resultante tiene codmes = self.codmes.
         """
         select_list = [F.col("CODMES").alias("CODMES_0"), key_col] + [
             F.col(orig).alias(dest) for orig, dest in cols.items()
@@ -553,21 +491,20 @@ class UniversoImplementacion:
             df = df.filter(filter_extra)
         df = df.select(*select_list).distinct()
         df = df.withColumn("codmes", _add_codmes_spark("CODMES_0", 1).cast(IntegerType()))
-        df = df.drop("CODMES_0")
-        return df
+        return df.drop("CODMES_0")
 
     def _read_mod_demo(self) -> DataFrame:
         return self._read_with_offset(
-            table="catalog_lhcl_prod_bcp.bcp_ddv_rbmbcapym_apppyme_vu.hm_scoreappbasepymemodulodemografico",
+            table=f"{self.src_catalog}.bcp_ddv_rbmbcapym_apppyme_vu.hm_scoreappbasepymemodulodemografico",
             key_col="codclaveunicocli",
             cols={"ctdmesantiguedadempsunat": "MOD_DEMO__ctdmesantiguedadempsunat"},
         )
 
     def _read_mod_act(self) -> DataFrame:
-        # hm_scoreappbasepymemoduloactivo usa CODMES_0 como nombre interno
-        table = "catalog_lhcl_prod_bcp.bcp_ddv_rbmbcapym_apppyme_vu.hm_scoreappbasepymemoduloactivo"
         df = (
-            self.spark.table(table)
+            self.spark.table(
+                f"{self.src_catalog}.bcp_ddv_rbmbcapym_apppyme_vu.hm_scoreappbasepymemoduloactivo"
+            )
             .filter(F.col("codmes") == self.codmes_data)
             .select(
                 F.col("CODMES_0").alias("CODMES_0"),
@@ -579,21 +516,21 @@ class UniversoImplementacion:
             .distinct()
         )
         df = df.withColumn("codmes", _add_codmes_spark("CODMES_0", 1).cast(IntegerType()))
-        df = df.drop("CODMES_0")
-        return df
+        return df.drop("CODMES_0")
 
     def _read_videvar_mora_pond(self) -> DataFrame:
         return self._read_with_offset(
-            table="catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_matrizmoraponderadaclientemmgr",
+            table=f"{self.src_catalog}.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_matrizmoraponderadaclientemmgr",
             key_col="codclaveunicocli",
             cols={"mtodeudaclasifriesgofactordsctosolu12": "VIDEVAR_MTX_MORA_POND_CLI_MMGR__mtodeudaclasifriesgofactordsctosolu12"},
         )
 
     def _read_pasivo_evol_sald(self) -> DataFrame:
-        """Join por codinternocomputacional (no por codclaveunicocli)."""
-        table = "catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_variablepasivoevolucionsaldopyme"
+        """Join por codinternocomputacional."""
         df = (
-            self.spark.table(table)
+            self.spark.table(
+                f"{self.src_catalog}.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_variablepasivoevolucionsaldopyme"
+            )
             .filter(F.col("codmes") == self.codmes_data)
             .select(
                 F.col("CODMES").alias("CODMES_0"),
@@ -604,28 +541,28 @@ class UniversoImplementacion:
             .distinct()
         )
         df = df.withColumn("codmes", _add_codmes_spark("CODMES_0", 1).cast(IntegerType()))
-        df = df.drop("CODMES_0")
-        return df
+        return df.drop("CODMES_0")
 
     def _read_mtx_rcc_otra_deuda(self) -> DataFrame:
         return self._read_with_offset(
-            table="catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matrizdeudorrccotradeuda",
+            table=f"{self.src_catalog}.bcp_ddv_matrizvariables_vu.hm_matrizdeudorrccotradeuda",
             key_col="codclaveunicocli",
             cols={"rcc_mto_rdv_max_u3m": "MTX_RCC_OTRA_DEUDA__rcc_mto_rdv_max_u3m"},
         )
 
     def _read_clasi_exper_cli(self) -> DataFrame:
         return self._read_with_offset(
-            table="catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_clasificacionclientenivelexperienciapyme",
+            table=f"{self.src_catalog}.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_clasificacionclientenivelexperienciapyme",
             key_col="codclaveunicocli",
             cols={"ctdempleado": "CLASI_EXPER_CLI__ctdempleado"},
         )
 
     def _read_evol_cli_pym(self) -> DataFrame:
         """Join por codinternocomputacional."""
-        table = "catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_variableactivoevolucionclientepyme"
         df = (
-            self.spark.table(table)
+            self.spark.table(
+                f"{self.src_catalog}.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_variableactivoevolucionclientepyme"
+            )
             .filter(F.col("codmes") == self.codmes_data)
             .select(
                 F.col("CODMES").alias("CODMES_0"),
@@ -635,19 +572,18 @@ class UniversoImplementacion:
             .distinct()
         )
         df = df.withColumn("codmes", _add_codmes_spark("CODMES_0", 1).cast(IntegerType()))
-        df = df.drop("CODMES_0")
-        return df
+        return df.drop("CODMES_0")
 
     def _read_mtx_resumen_saldo(self) -> DataFrame:
         return self._read_with_offset(
-            table="catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matrizresumensaldo",
+            table=f"{self.src_catalog}.bcp_ddv_matrizvariables_vu.hm_matrizresumensaldo",
             key_col="codclaveunicocli",
             cols={"prod_ctd_sld_act_u1m": "MTX_RESUMEN_SALDO__prod_ctd_sld_act_u1m"},
         )
 
     def _read_mtx_resumen_act_pas(self) -> DataFrame:
         return self._read_with_offset(
-            table="catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matrizresumensaldoactivopasivo",
+            table=f"{self.src_catalog}.bcp_ddv_matrizvariables_vu.hm_matrizresumensaldoactivopasivo",
             key_col="codclaveunicocli",
             cols={
                 "prod_mto_sld_fim_pas_min_24_24_rt_u24":     "MTX_RESUMEN_ACT_PAS__prod_mto_sld_fim_pas_min_24_24_rt_u24",
@@ -665,21 +601,21 @@ class UniversoImplementacion:
 
     def _read_mtx_mov_abono_pas(self) -> DataFrame:
         return self._read_with_offset(
-            table="catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matrizmovimientoabonopasivo",
+            table=f"{self.src_catalog}.bcp_ddv_matrizvariables_vu.hm_matrizmovimientoabonopasivo",
             key_col="codclaveunicocli",
             cols={"isav_tkt_opea_trnf_dol_max_u3m": "MTX_MOV_ABONO_PAS__isav_tkt_opea_trnf_dol_max_u3m"},
         )
 
     def _read_mtx_mov_cargo_pas(self) -> DataFrame:
         return self._read_with_offset(
-            table="catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matrizmovimientocargopasivo",
+            table=f"{self.src_catalog}.bcp_ddv_matrizvariables_vu.hm_matrizmovimientocargopasivo",
             key_col="codclaveunicocli",
             cols={"isav_tkt_opec_pago_srv_prm_u3m": "MTX_MOV_CARGO_PAS__isav_tkt_opec_pago_srv_prm_u3m"},
         )
 
     def _read_mtx_trx_canal_pago_transf(self) -> DataFrame:
         return self._read_with_offset(
-            table="catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matriztransaccioncanalpagotransferencia",
+            table=f"{self.src_catalog}.bcp_ddv_matrizvariables_vu.hm_matriztransaccioncanalpagotransferencia",
             key_col="codclaveunicocli",
             cols={
                 "can_ctd_tmo_tot_pag_bcp_frq_u6m": "MTX_TRX_CANAL_PAGO_TRANSF__can_ctd_tmo_tot_pag_bcp_frq_u6m",
@@ -689,14 +625,14 @@ class UniversoImplementacion:
 
     def _read_mtx_rcc_prod(self) -> DataFrame:
         return self._read_with_offset(
-            table="catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matrizdeudorrccproducto",
+            table=f"{self.src_catalog}.bcp_ddv_matrizvariables_vu.hm_matrizdeudorrccproducto",
             key_col="codclaveunicocli",
             cols={"rcc_tip_cond_mor_max_crnor_max_u6m": "MTX_RCC_PROD__rcc_tip_cond_mor_max_crnor_max_u6m"},
         )
 
     def _read_mtx_trx_canal(self) -> DataFrame:
         return self._read_with_offset(
-            table="catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matriztransaccioncanal",
+            table=f"{self.src_catalog}.bcp_ddv_matrizvariables_vu.hm_matriztransaccioncanal",
             key_col="codclaveunicocli",
             cols={"can_tkt_tmo_tot_sol_min_u12": "MTX_TRX_CANAL__can_tkt_tmo_tot_sol_min_u12"},
         )
@@ -711,28 +647,14 @@ class UniversoImplementacion:
                   df_mtx_resumen_act_pas, df_mtx_mov_abono_pas,
                   df_mtx_mov_cargo_pas, df_mtx_trx_canal_pago,
                   df_mtx_rcc_prod, df_mtx_trx_canal) -> DataFrame:
-        """
-        Une todas las tablas de variables al universo base.
-        - Joins por (codmes, codclaveunicocli): la mayoría
-        - Joins por (codmes, codinternocomputacional): PASIVO_EVOL_SALD_PYM, EVOL_CLI_PYM
-        """
-        # Tablas con join por codclaveunicocli
-        joins_clave = [
-            df_app_score,
-            df_mod_demo,
-            df_mod_act,
-            df_videvar_mora_pond,
-            df_mtx_rcc_otra_deuda,
-            df_clasi_exper_cli,
-            df_mtx_resumen_saldo,
-            df_mtx_resumen_act_pas,
-            df_mtx_mov_abono_pas,
-            df_mtx_mov_cargo_pas,
-            df_mtx_trx_canal_pago,
-            df_mtx_rcc_prod,
-            df_mtx_trx_canal,
-        ]
 
+        # Joins por codclaveunicocli
+        joins_clave = [
+            df_app_score, df_mod_demo, df_mod_act, df_videvar_mora_pond,
+            df_mtx_rcc_otra_deuda, df_clasi_exper_cli, df_mtx_resumen_saldo,
+            df_mtx_resumen_act_pas, df_mtx_mov_abono_pas, df_mtx_mov_cargo_pas,
+            df_mtx_trx_canal_pago, df_mtx_rcc_prod, df_mtx_trx_canal,
+        ]
         result = df_universo
         for tabla in joins_clave:
             var_cols = [c for c in tabla.columns if c not in ("codmes", "codclaveunicocli")]
@@ -743,7 +665,7 @@ class UniversoImplementacion:
                 how="left",
             )
 
-        # Tablas con join por codinternocomputacional
+        # Joins por codinternocomputacional
         for tabla in [df_pasivo_evol_sald, df_evol_cli_pym]:
             var_cols = [c for c in tabla.columns if c not in ("codmes", "codinternocomputacional")]
             result = result.join(
@@ -752,7 +674,6 @@ class UniversoImplementacion:
                 on=["codmes", "codinternocomputacional"],
                 how="left",
             )
-
         return result
 
     # ------------------------------------------------------------------
@@ -766,13 +687,12 @@ class UniversoImplementacion:
         ])
 
     # ------------------------------------------------------------------
-    # PASO 6: Capping (clip) — valores del notebook Troncal de Sherly
+    # PASO 6: Capping (clip)
     # ------------------------------------------------------------------
     def _apply_capping(self, df: DataFrame) -> DataFrame:
         existing_cols = set(df.columns)
         for col_orig, col_dest, lower, upper in CAPPING_RULES:
             if col_orig not in existing_cols:
-                # Si la columna origen no existe, crear destino como NULL
                 df = df.withColumn(col_dest, F.lit(None).cast("double"))
                 continue
             expr = F.col(col_orig)
@@ -787,67 +707,49 @@ class UniversoImplementacion:
         return df
 
     # ------------------------------------------------------------------
-    # PASO 7: Derivar RNG_ACTIVIDAD_ECONOM (encoding de act_eco_fin)
+    # PASO 7: RNG_ACTIVIDAD_ECONOM
     # ------------------------------------------------------------------
     def _build_rng_actividad_econom(self, df: DataFrame) -> DataFrame:
-        """
-        Replica la lógica del notebook Troncal de Sherly para RNG_ACTIVIDAD_ECONOM.
-        La feature ya existe en el df si viene de APP_SCORE_APROB_PYME;
-        si no, se deriva desde APP_SCORE_APROB_PYME__act_eco_fin.
-        """
         if "RNG_ACTIVIDAD_ECONOM" in df.columns:
             return df
-
         act_col = "APP_SCORE_APROB_PYME__act_eco_fin"
         if act_col not in df.columns:
             return df.withColumn("RNG_ACTIVIDAD_ECONOM", F.lit(None).cast("int"))
-
         categorias_1 = [
             "PESCA", "OTROS", "SERVICIOS", "ENERGIA", "CONSTRUCCION",
             "ADM_PUBLICA", "ACT INMOB, EMP Y DE ALQ", "INDUST_MANUFACT",
             "COMERCIO", "HOGAR", "SALUD",
         ]
-        df = df.withColumn(
+        return df.withColumn(
             "RNG_ACTIVIDAD_ECONOM",
             F.when(F.col(act_col).isNull(), 1)
              .when(F.col(act_col).isin(categorias_1), 1)
              .otherwise(0),
         )
-        return df
 
     # ------------------------------------------------------------------
-    # PASO 8: Selección de columnas clave + features del modelo
+    # PASO 8: Selección de features
     # ------------------------------------------------------------------
     def _select_features(self, df: DataFrame) -> DataFrame:
-        """
-        Selecciona las columnas clave (PKs) y las features del modelo.
-        Las features que no existan en el df se agregan como NULL.
-        """
         key_cols = ["codmes", "codclaveunicocli", "codclavepartycli", "codinternocomputacional"]
         existing = set(df.columns)
-
         select_list = [F.col(c) for c in key_cols if c in existing]
         for feat in self.feature_names:
             if feat in existing:
                 select_list.append(F.col(feat))
             else:
                 select_list.append(F.lit(None).cast("double").alias(feat))
-
         return df.select(*select_list)
 
     # ------------------------------------------------------------------
-    # PASO 9: Escritura a Unity Catalog (Delta, particionado por codmes)
+    # PASO 9: Escritura en Unity Catalog
     # ------------------------------------------------------------------
     def _write_table_master(self, df: DataFrame) -> None:
-        """
-        Escribe el DataFrame en Unity Catalog como tabla Delta,
-        sobrescribiendo solo la partición del mes en curso.
-        """
         (
             df.write
             .format("delta")
             .mode("overwrite")
-            .option("replaceWhere", f"codmes = {self.mes_vta}")
+            .option("replaceWhere", f"codmes = {self.codmes}")
             .partitionBy("codmes")
             .saveAsTable(self.table_master)
         )
