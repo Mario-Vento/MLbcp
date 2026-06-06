@@ -1,4 +1,4 @@
-# universo_implementacion.py***
+# universo_implementacion.py////
 # Propósito: Construir el universo de clientes PYME, extraer y unir variables
 #            desde cada tabla fuente, aplicar reemplazo de dummies, capping (clip),
 #            seleccionar las features y escribir la table_master en Unity Catalog.
@@ -445,11 +445,15 @@ class UniversoImplementacion:
     # ------------------------------------------------------------------
     # PASO 3: Lectura de tablas troncales (todas con desfase +1)
     # ------------------------------------------------------------------
-    def _read_with_offset(self, table, key_col, cols, filter_extra=None):
+    def _read_with_offset(self, table, key_col, cols, filter_extra=None, mes_lectura=None):
+        # Mes del que se leen los datos. Por defecto codmes_data (mes anterior);
+        # algunas tablas requieren el mes de proceso (self.codmes).
+        if mes_lectura is None:
+            mes_lectura = self.codmes_data
         select_list = [key_col] + [
             F.col(orig).alias(dest) for orig, dest in cols.items()
         ]
-        df = self.spark.table(table).filter(F.col("codmes") == self.codmes_data)
+        df = self.spark.table(table).filter(F.col("codmes") == mes_lectura)
         if filter_extra is not None:
             df = df.filter(filter_extra)
         df = df.select(*select_list).distinct()
@@ -506,6 +510,7 @@ class UniversoImplementacion:
             table=f"{self.src_catalog}.bcp_ddv_matrizvariables_vu.hm_matrizdeudorrccotradeuda",
             key_col="codclaveunicocli",
             cols={"rcc_mto_rdv_max_u3m": "MTX_RCC_OTRA_DEUDA__rcc_mto_rdv_max_u3m"},
+            mes_lectura=self.codmes,
         )
 
     def _read_clasi_exper_cli(self) -> DataFrame:
@@ -513,6 +518,7 @@ class UniversoImplementacion:
             table=f"{self.src_catalog}.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_clasificacionclientenivelexperienciapyme",
             key_col="codclaveunicocli",
             cols={"ctdempleado": "CLASI_EXPER_CLI__ctdempleado"},
+            mes_lectura=self.codmes,
         )
 
     def _read_evol_cli_pym(self) -> DataFrame:
@@ -521,7 +527,7 @@ class UniversoImplementacion:
             self.spark.table(
                 f"{self.src_catalog}.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_variableactivoevolucionclientepyme"
             )
-            .filter(F.col("codmes") == self.codmes_data)
+            .filter(F.col("codmes") == self.codmes)
             .select(
                 "codinternocomputacional",
                 F.col("ctdmaxdiamorau6m").alias("EVOL_CLI_PYM__ctdmaxdiamorau6m"),
@@ -535,6 +541,7 @@ class UniversoImplementacion:
             table=f"{self.src_catalog}.bcp_ddv_matrizvariables_vu.hm_matrizresumensaldo",
             key_col="codclaveunicocli",
             cols={"prod_ctd_sld_act_u1m": "MTX_RESUMEN_SALDO__prod_ctd_sld_act_u1m"},
+            mes_lectura=self.codmes,
         )
 
     def _read_mtx_resumen_act_pas(self) -> DataFrame:
@@ -553,6 +560,7 @@ class UniversoImplementacion:
                 "prod_mto_sld_prm_act_max_min_6_6_rt_u6m":    "MTX_RESUMEN_ACT_PAS__prod_mto_sld_prm_act_max_min_6_6_rt_u6m",
                 "prod_mto_sld_fim_tsav_max_min_12_12_rt_u12": "MTX_RESUMEN_ACT_PAS__prod_mto_sld_fim_tsav_max_min_12_12_rt_u12",
             },
+            mes_lectura=self.codmes,
         )
 
     def _read_mtx_mov_abono_pas(self) -> DataFrame:
@@ -560,6 +568,7 @@ class UniversoImplementacion:
             table=f"{self.src_catalog}.bcp_ddv_matrizvariables_vu.hm_matrizmovimientoabonopasivo",
             key_col="codclaveunicocli",
             cols={"isav_tkt_opea_trnf_dol_max_u3m": "MTX_MOV_ABONO_PAS__isav_tkt_opea_trnf_dol_max_u3m"},
+            mes_lectura=self.codmes,
         )
 
     def _read_mtx_mov_cargo_pas(self) -> DataFrame:
@@ -567,6 +576,7 @@ class UniversoImplementacion:
             table=f"{self.src_catalog}.bcp_ddv_matrizvariables_vu.hm_matrizmovimientocargopasivo",
             key_col="codclaveunicocli",
             cols={"isav_tkt_opec_pago_srv_prm_u3m": "MTX_MOV_CARGO_PAS__isav_tkt_opec_pago_srv_prm_u3m"},
+            mes_lectura=self.codmes,
         )
 
     def _read_mtx_trx_canal_pago_transf(self) -> DataFrame:
@@ -577,6 +587,7 @@ class UniversoImplementacion:
                 "can_ctd_tmo_tot_pag_bcp_frq_u6m": "MTX_TRX_CANAL_PAGO_TRANSF__can_ctd_tmo_tot_pag_bcp_frq_u6m",
                 "can_mto_tmo_tot_pag_bcp_prm_u6m": "MTX_TRX_CANAL_PAGO_TRANSF__can_mto_tmo_tot_pag_bcp_prm_u6m",
             },
+            mes_lectura=self.codmes,
         )
 
     def _read_mtx_rcc_prod(self) -> DataFrame:
@@ -584,6 +595,7 @@ class UniversoImplementacion:
             table=f"{self.src_catalog}.bcp_ddv_matrizvariables_vu.hm_matrizdeudorrccproducto",
             key_col="codclaveunicocli",
             cols={"rcc_tip_cond_mor_max_crnor_max_u6m": "MTX_RCC_PROD__rcc_tip_cond_mor_max_crnor_max_u6m"},
+            mes_lectura=self.codmes,
         )
 
     def _read_mtx_trx_canal(self) -> DataFrame:
@@ -591,6 +603,7 @@ class UniversoImplementacion:
             table=f"{self.src_catalog}.bcp_ddv_matrizvariables_vu.hm_matriztransaccioncanal",
             key_col="codclaveunicocli",
             cols={"can_tkt_tmo_tot_sol_min_u12": "MTX_TRX_CANAL__can_tkt_tmo_tot_sol_min_u12"},
+            mes_lectura=self.codmes,
         )
 
     # ------------------------------------------------------------------
@@ -703,9 +716,8 @@ class UniversoImplementacion:
     def _cast_features_to_double(self, df: DataFrame) -> DataFrame:
         """
         Normaliza columnas a DoubleType para alinear el schema con la tabla
-        de referencia. Los identificadores string y act_eco_fin (string en el
-        target) no se castean. codmes se castea a Double porque así está en el
-        target.
+        de referencia. codmes se mantiene Integer; los identificadores string
+        y act_eco_fin (string en el target) no se castean.
         """
         keep_as_is = {
             "codclaveunicocli", "codclavepartycli", "codinternocomputacional",
