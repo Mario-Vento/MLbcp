@@ -460,7 +460,9 @@ class UniversoImplementacion:
                 F.greatest(
                     F.least(F.lit(224813.35), F.col("rcc_deu_ind_pj_prm_u3m_imp")),
                     F.lit(0.0)) ) )
-        )
+        
+        # Construcción de variable rcc_pct_sf3_sf24_ship_rt_24 (8)
+        # No aplica
 
         # Construcción de variable rcc_pct_rdv_prm_u3ma (9)
         df_final = (
