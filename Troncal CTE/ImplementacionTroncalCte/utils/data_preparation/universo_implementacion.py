@@ -474,7 +474,6 @@ class UniversoImplementacion:
                     F.greatest(
                         F.least(F.lit(0.03), F.col("rcc_pct_rdv_prm_u3m")),
                         F.lit(0.00264)) ) ) )
-        )
 
         # Construcción de variable prd_prm_tsav_mnn_6_6_rt6a (10)
         df_final = df_final.withColumn(
@@ -524,7 +523,7 @@ class UniversoImplementacion:
         # Construcción de variable ftc_flg_pg_ful_clant_sol_mx_u3_c (14)
         df_final = df_final.withColumn(
             "ftc_flg_pg_ful_clant_sol_mx_u3_c",
-            F.col("fatc_flg_pg_ful_cclient_sol_max_u3m").cast("string")
+            F.col("fatc_flg_pag_ful_cclant_sol_max_u3m").cast("string")
         )
 
         df_final = df_final.fillna(".", subset=['ftc_flg_pg_ful_clant_sol_mx_u3_c']) # OBS: SAS espera "." en lugar de null
