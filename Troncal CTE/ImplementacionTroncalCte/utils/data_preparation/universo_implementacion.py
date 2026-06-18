@@ -189,11 +189,12 @@ class UniversoImplementacion:
             F.coalesce(F.max(F.when(F.col("flgctavalida") == "1", F.col("ctdmesmaduracion"))), F.lit(0)).alias("max_maduracion_cli"),
             F.coalesce(F.sum(F.when(F.col("flgctavalida") == "1", F.col("mtosaldocapitalsol"))), F.lit(0)).alias("mtosaldocapitalsol"),
             # --- Banderas solo con cuentas válidas ---
-            F.coalesce(F.max(F.when(F.col("flgctavalida") == "1" & self.v_flg_rev, F.lit(1))), F.lit(0)).alias("FLG_TC"),
-            F.coalesce(F.max(F.when(F.col("flgctavalida") == "1" & self.v_flg_rev, F.col("flgtarjetacreditoper"))), F.lit(0)).cast("int").alias("FLG_TC_PERSONAS"),
-            F.coalesce(F.max(F.when(F.col("flgctavalida") == "1" & self.v_flg_cef, F.lit(1))), F.lit(0)).alias("FLG_CEF"),
-            F.coalesce(F.max(F.when(F.col("flgctavalida") == "1" & self.v_flg_veh, F.lit(1))), F.lit(0)).alias("FLG_VEH"),
-            F.coalesce(F.max(F.when(F.col("flgctavalida") == "1" & self.v_flg_hip, F.lit(1))), F.lit(0)).alias("FLG_HIP")
+            F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_rev, F.lit(1))), F.lit(0)).alias("FLG_TC"),
+            F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_rev, F.col("flgtarjetacreditoper"))), F.lit(0)).cast("int").alias("FLG_TC_PERSONAS"),
+            F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_cef, F.lit(1))), F.lit(0)).alias("FLG_CEF"),
+            F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_veh, F.lit(1))), F.lit(0)).alias("FLG_VEH"),
+            F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_hip, F.lit(1))), F.lit(0)).alias("FLG_HIP"),
+
         )
 
         df_porto = df_porto.dropDuplicates(["codclaveunicocli", "codmes"])
@@ -283,7 +284,7 @@ class UniversoImplementacion:
             # 9. Facturación tarjeta (join por codclaveunicocli)
             (
                 "catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matrizfacturaciontarjeta",
-                ["fatc_flg_pg_ful_cclant_sol_max_u3m"],
+                ["fatc_flg_pag_ful_cclant_sol_max_u3m"],
                 "codclaveunicocli", 0, "df_mtx_fact_tc",
             ),
             # 10. Facturación transacción tarjeta
@@ -520,9 +521,9 @@ class UniversoImplementacion:
             ).otherwise(F.lit(None))
         )
 
-        # Construcción de variable ftc_flg_pg_ful_clant_sol_mx_u3_c (14)
+        # Construcción de variable ftc_flg_pag_ful_clant_sol_mx_u3_c (14)
         df_final = df_final.withColumn(
-            "ftc_flg_pg_ful_clant_sol_mx_u3_c",
+            "ftc_flg_pag_ful_clant_sol_mx_u3_c",
             F.col("fatc_flg_pag_ful_cclant_sol_max_u3m").cast("string")
         )
 
