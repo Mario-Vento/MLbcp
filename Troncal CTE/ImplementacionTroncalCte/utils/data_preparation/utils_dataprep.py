@@ -35,7 +35,7 @@ def write_to_unity_catalog(
         )
     print(f"✅ Tabla escrita: {table_name} (mode={mode})")
 
-def print_spark(df, n=20)
+def print_spark(df, n=20):
     """Reemplazo de printSpark de Utils"""
     df.show(n, truncate=False)
 

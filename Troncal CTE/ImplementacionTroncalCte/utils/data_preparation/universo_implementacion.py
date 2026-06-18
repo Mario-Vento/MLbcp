@@ -289,13 +289,13 @@ class UniversoImplementacion:
             # 10. Facturación transacción tarjeta
             (
                 "catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matrizfacturaciontransacciontarjeta",
-                ["fatc_pct_pag_mn_ctamin_u6m_rt_u6m"],
+                ["fatc_pct_pag_min_ctamin_u6m_rt_u6m"],
                 "codclavepartycli", 0, "df_mtx_fact_tx_tc",
             ),
             # 11. Grafo atributo cliente banca (desfase +1)
             (
                 "catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_flujotrxcli_vu.hm_matrizgrafoatributoclientebanca",
-                ["grf_pct_cto_vta_prov_def_tip_clas_rie_tot_4_prm_u3m"],
+                ["grf_pct_cto_vta_prov_def_tip_clas_rie_sbs_4_prm_u3m"],
                 "codclavepartycli", +1, "df_mtx_grfatrib_cli",
             ),
             # 12. Grafo interacción banca (desfase +1)
@@ -488,8 +488,8 @@ class UniversoImplementacion:
         df_final = df_final.withColumn(
             "mto_deu_mora_sol_u48_cut",
             F.when(
-                F.col("mtodeudadiamorafactordscotsolu48").isNotNull(),
-                F.greatest(F.lit(0), F.least(F.lit(105000), F.col("mtodeudadiamorafactordscotsolu48")))
+                F.col("mtodeudadiamorafactordsctosolu48").isNotNull(),
+                F.greatest(F.lit(0), F.least(F.lit(105000), F.col("mtodeudadiamorafactordsctosolu48")))
             ).otherwise(F.lit(None))
         ).withColumn(
             "mto_deu_mora_sol_u48_log",
@@ -578,7 +578,7 @@ class UniversoImplementacion:
         )
         df_final = df_final.withColumn(
             "ctdpdhu24_cut",
-            F.cell(F.col("ctdpdhu24") / 2) * 2
+            F.ceil(F.col("ctdpdhu24") / 2) * 2
         )
 
         # Construcción de variable pos_pct_q_etcnpscl_a_sum_u6_rt6 (20)
