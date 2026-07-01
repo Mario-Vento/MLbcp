@@ -1,5 +1,6 @@
 from pyspark.storagelevel import StorageLevel
 from pyspark.sql import functions as F
+from pyspark.sql.types import NumericType, DecimalType
 
 def write_to_unity_catalog(
     df,
@@ -89,3 +90,87 @@ def join_variable_table(
             result.createOrReplaceTempView(df_name)
 
     return result
+
+# =================================================================================
+# Helpers portados desde el Utils de Notebook de Modelador Arnold + apply_unified.
+# =================================================================================
+
+# Valores centinela usados como indicadores de missing (incluye los que
+# generan los ratios max_mora_intra_g3m y rcc_mto_deu_ship_max_u12_u24).
+SENTINELS_DEFAULT = [
+    1111111111, -1111111111,
+    2222222222, -2222222222,
+    3333333333, -3333333333,
+    4444444444, 44444444444,
+    5555555555,
+    6666666666,
+    7777777777,
+]
+
+
+def replace_sentinels_with_null(spark, df, sentinels=None):
+    """Reemplaza valores centinela por NULL en todas las columnas numéricas.
+    Compara en double para soportar long y decimal sin problemas de tipo."""
+    if sentinels is None:
+        sentinels = SENTINELS_DEFAULT
+    sset = [float(s) for s in sentinels]
+    num_cols = [f.name for f in df.schema.fields if isinstance(f.dataType, NumericType)]
+    for c in num_cols:
+        df = df.withColumn(
+            c,
+            F.when(F.col(c).cast("double").isin(sset), F.lit(None)).otherwise(F.col(c)),
+        )
+    return df
+
+
+def decimals_to_double(spark, df):
+    """Convierte toda columna DecimalType a double (evita problemas de escala
+    aguas abajo y empata con lo que espera el scoreo SAS)."""
+    for f in df.schema.fields:
+        if isinstance(f.dataType, DecimalType):
+            df = df.withColumn(f.name, F.col(f.name).cast("double"))
+    return df
+
+
+def rename_columns_safe(df, mapping: dict):
+    """Renombra columnas según mapping {viejo: nuevo}, ignorando las que no
+    existen y los renombrados identidad."""
+    for old, new in mapping.items():
+        if old in df.columns and old != new:
+            df = df.withColumnRenamed(old, new)
+    return df
+
+
+def apply_caps_xgb_cap24(df):
+    """Caps del modelo model_xgboost_cap_24_mono_200 (ArnoldNotebook celda 3,
+    apply_unified). Debe ejecutarse DESPUÉS de rename_columns_safe(DICT_NAMES_SAS),
+    porque referencia los nombres SAS."""
+    df = df.withColumn('ctdmora_intra_0_o', F.when(F.col('ctdmora_intra_0').isNull(), F.lit(None)).otherwise(F.least(F.greatest(F.col('ctdmora_intra_0'), F.lit(1)), F.lit(30))).cast('double'))
+
+    df = df.withColumn('max_mora_intra_u6m_o', F.when(F.col('max_mora_intra_u6m').isNull(), F.lit(None)).otherwise(F.least(F.greatest(F.col('max_mora_intra_u6m'), F.lit(1)), F.lit(32))).cast('double'))
+
+    df = df.withColumn('prd_pct_pmpas_pmact_2_000_o', F.when(F.col('prd_pct_pmpas_pmact_2_000').isNull(), F.lit(None)).otherwise(F.least(F.greatest(F.col('prd_pct_pmpas_pmact_2_000'), F.lit(0.00692478)), F.lit(117.23953515))).cast('double'))
+
+    df = df.withColumn('fatc_pct_pag_mn_ctami_000_o', F.when(F.col('fatc_pct_pag_mn_ctami_000').isNull(), F.lit(None)).otherwise(F.least(F.greatest(F.col('fatc_pct_pag_mn_ctami_000'), F.lit(0)), F.lit(26.23016959))).cast('double'))
+
+    df = df.withColumn('rcc_pct_rdv_prm_u3m_ooo', F.when(F.col('rcc_pct_rdv_prm_u3m').isNull(), F.lit(None)).otherwise(F.least(F.greatest(F.col('rcc_pct_rdv_prm_u3m'), F.lit(0.00011443993572)), F.lit(0.04283144838078))).cast('double'))
+
+    df = df.withColumn('prd_prm_tsav_mnn_6_6_rt6_ooo', F.when(F.col('prd_prm_tsav_mnn_6_6_rt6').isNull(), F.lit(None)).otherwise(F.least(F.greatest(F.col('prd_prm_tsav_mnn_6_6_rt6'), F.lit(0.06626325)), F.lit(0.77784588))).cast('double'))
+
+    df = df.withColumn('q_diamora_max_100_u24_o', F.when(F.col('q_diamora_max_100_u24').isNull(), F.lit(None)).otherwise(F.least(F.greatest(F.col('q_diamora_max_100_u24'), F.lit(0)), F.lit(17))).cast('double'))
+
+    df = df.withColumn('edad_o', F.when(F.col('edad').isNull(), F.lit(None)).otherwise(F.least(F.greatest(F.col('edad'), F.lit(22)), F.lit(69))).cast('double'))
+
+    df = df.withColumn('ctdpdhu24_ooo', F.when(F.col('ctdpdhu24').isNull(), F.lit(None)).otherwise(F.least(F.greatest(F.col('ctdpdhu24'), F.lit(3)), F.lit(24))).cast('double'))
+
+    df = df.withColumn('isav_q_opea_desm_prm_u3m_o', F.when(F.col('isav_q_opea_desm_prm_u3m').isNull(), F.lit(None)).otherwise(F.least(F.greatest(F.col('isav_q_opea_desm_prm_u3m'), F.lit(0)), F.lit(0.33333333333333))).cast('double'))
+
+    df = df.withColumn('mto_deu_mora_sol_u48_o', F.when(F.col('mto_deu_mora_sol_u48').isNull(), F.lit(None)).otherwise(F.least(F.greatest(F.col('mto_deu_mora_sol_u48'), F.lit(0)), F.lit(51084.120726))).cast('double'))
+
+    df = df.withColumn('rcc_mto_deu_ind_pj_pr_000_o', F.when(F.col('rcc_mto_deu_ind_pj_pr_000').isNull(), F.lit(None)).otherwise(F.least(F.greatest(F.col('rcc_mto_deu_ind_pj_pr_000'), F.lit(0)), F.lit(180195.45))).cast('double'))
+
+    df = df.withColumn('pos_tkt_trx_com_sol_p_000_ooo', F.when(F.col('pos_tkt_trx_com_sol_p_000').isNull(), F.lit(None)).otherwise(F.least(F.greatest(F.col('pos_tkt_trx_com_sol_p_000'), F.lit(28.6940555566666)), F.lit(262.574863266666))).cast('double'))
+
+    df = df.withColumn('rcc_mto_gar_ope_cre_o', F.when(F.col('rcc_mto_gar_ope_cre').isNull(), F.lit(None)).otherwise(F.least(F.greatest(F.col('rcc_mto_gar_ope_cre'), F.lit(0)), F.lit(1760351.33))).cast('double'))
+
+    return df

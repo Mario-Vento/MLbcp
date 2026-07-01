@@ -16,7 +16,7 @@ def get_dataprep_config(periodo: str):
         "codmes_fin": periodo,
 
         # --- Catálogos y Esquemas ---
-        "src_catalog": "catalog_lhcl_prod.bcp",
+        "src_catalog": "catalog_lhcl_prod_bcp", 
         "sink_catalog": "catalog_cemm_expl_bcp_prod", # Antes "catalog_lhcl_prod_bcp"
         # "sink_schema": "bcp_expl_007_models", # Default temporal, o puede venir del entorno
         "sink_schema": "bcp_expl_007", # bcp_expl_007_models genera fallas en notebook 03
@@ -29,6 +29,7 @@ def get_dataprep_config(periodo: str):
         "src_schema_portafolio": "bcp_ddv_adrmmgr_seginfobasesgenerales_vu",
         "src_table_portafolio": "hm_portafoliocredito",
         "sink_table_portafolio_troncal": "bhv_troncal_cliente_base",
+        "path_mora_intrames": "catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_clientemoraintrames",
     }
 
     return config

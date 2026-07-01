@@ -9,19 +9,114 @@ from pyspark.sql.functions import (
     desc, lit, col, trim, current_timestamp, coalesce, when,
     date_format, sum, max, min, count, countDistinct,
     substr, substring, floor, avg, concat, add_months,
-    round, greatest, broadcast,
+    round, greatest, least, broadcast, log1p, months_between,
+    last_day, to_date,
 )
 from pyspark.sql.column import Column
 from pyspark.sql.types import (DataType, NumericType)
 from pyspark.sql.utils import AnalysisException
 from pyspark.storagelevel import StorageLevel
 
-from utils.data_preparation.utils_dataprep import write_to_unity_catalog, join_variable_table, print_spark
+from utils.data_preparation.utils_dataprep import (
+    write_to_unity_catalog,
+    join_variable_table,
+    print_spark,
+    apply_caps_xgb_cap24,
+    replace_sentinels_with_null,
+    decimals_to_double,
+    rename_columns_safe,
+)
+
+# =============================================================================
+# Diccionario de renombrado a nombres SAS
+# Clave = nombre de modelo (cómo queda la columna tras la capa de alias)
+# Valor = nombre SAS final (truncado a <=32 chars, como lo espera el .sashdat)
+# =============================================================================
+DICT_NAMES_SAS = {
+    "ctdmora_intra_0": "ctdmora_intra_0",
+    "max_maduracion_cli": "max_maduracion_cli",
+    "max_mora_intra_u6m": "max_mora_intra_u6m",
+    "exp_pct_evol_ship_u3m_rt_u6m": "exp_pct_evol_ship_u3m_000",
+    "prd_pct_pmpas_pmact_24_24_rt24": "prd_pct_pmpas_pmact_2_000",
+    "fatc_pct_pag_mn_ctamin_u6m_rtu6": "fatc_pct_pag_mn_ctami_000",
+    "rcc_mto_deu_ind_pj_prm_u3m": "rcc_mto_deu_ind_pj_pr_000",
+    "rcc_pct_sf3_sf24_ship_rt_u24": "rcc_pct_sf3_sf24_ship_000",
+    "rcc_pct_rdv_prm_u3m": "rcc_pct_rdv_prm_u3m",
+    "prd_prm_tsav_mnn_6_6_rt6": "prd_prm_tsav_mnn_6_6_rt6",
+    "mto_deu_mora_sol_u48": "mto_deu_mora_sol_u48",
+    "flg_titulo": "flg_titulo",
+    "q_diamora_max_100_u24": "q_diamora_max_100_u24",
+    "fatc_flg_pag_ful_clant_sol_mx_u3": "fatc_flg_pag_ful_clan_000",
+    "rcc_pct_sf12_sf24_rt_u24": "rcc_pct_sf12_sf24_rt_u24",
+    "rcc_q_mes_act_sf_buen_mal_0_u3m": "rcc_q_mes_act_sf_buen_000",
+    "max_mora_intra_g3m": "max_mora_intra_g3m",
+    "ctdpdhu24": "ctdpdhu24",
+    "pos_pct_q_etcnpscl_a_sum_u6_rt6": "pos_pct_q_etcnpscl_a__000",
+    "pos_tkt_trx_com_sol_prm_u3m": "pos_tkt_trx_com_sol_p_000",
+    "grf_tip_clas_rie_cli_2_4_mx_u3m": "grf_tip_clas_rie_cli__000",
+    "isav_q_opea_desm_prm_u3m": "isav_q_opea_desm_prm_u3m",
+    "rcc_mto_deu_ship_max_u12_u24": "rcc_mto_deu_ship_max__000",
+    "grf_cvta_prov_rie4_prm_u3m": "grf_cvta_prov_rie4_pr_000",
+    "prod_flg_sld_aho_300": "prod_flg_sld_aho_300",
+    "q_mes_mto_tot_pgsrv_sol_m0_u3m": "q_mes_mto_tot_pgsrv_s_000",
+    "rcc_mto_gar_ope_cre": "rcc_mto_gar_ope_cre",
+}
+
+# Capa de alias: nombre de columna FUENTE -> nombre de modelo (ArnoldNotebook celda 18)
+# Solo se listan las que difieren; el resto de columnas fuente ya coinciden.
+SOURCE_TO_MODEL = {
+    # --- mora intra (hm_clientemoraintrames) ---
+    "ctdnivmoracli": "ctdmora_intra_0",
+    "ctdmaxatrasou3m": "max_mora_intra_u3m",
+    "ctdmaxatrasop3m": "max_mora_intra_p3m",
+    "ctdmaxatrasou6m": "max_mora_intra_u6m",
+    # --- resto de fuentes ---
+    "prod_pct_pmpas_pmact_24_24_rt_u24": "prd_pct_pmpas_pmact_24_24_rt24",
+    "prod_mto_sld_prm_tsav_min_6_6_rt_u6m": "prd_prm_tsav_mnn_6_6_rt6",
+    "fatc_pct_pag_min_ctamin_u6m_rt_u6m": "fatc_pct_pag_mn_ctamin_u6m_rtu6",
+    "fatc_flg_pag_ful_cclant_sol_max_u3m": "fatc_flg_pag_ful_clant_sol_mx_u3",
+    "mtodeudadiamorafactordsctosolu48": "mto_deu_mora_sol_u48",
+    "exp_ctd_diamora_max_100_u24": "q_diamora_max_100_u24",
+    "rcc_ctd_mes_act_sf_buen_mal_0_u3m": "rcc_q_mes_act_sf_buen_mal_0_u3m",
+    "pos_pct_ctd_etcnpscl_a_sum_u6m_rt_u6m": "pos_pct_q_etcnpscl_a_sum_u6_rt6",
+    "grf_pct_tip_clas_rie_sbs_cli_2_4_max_u3m": "grf_tip_clas_rie_cli_2_4_mx_u3m",
+    "isav_ctd_opea_desm_prm_u3m": "isav_q_opea_desm_prm_u3m",
+    "grf_pct_cto_vta_prov_def_tip_clas_rie_sbs_4_prm_u3m": "grf_cvta_prov_rie4_prm_u3m",
+    "ctdmesmtototalpagoservsolmay0u3m": "q_mes_mto_tot_pgsrv_sol_m0_u3m",
+}
+
+
+def _ratio_with_sentinels(num_col: str, den_col: str) -> Column:
+    """Ratio A/B con valores centinela (ArnoldNotebook celdas 26 y 28).
+    Los centinelas se anulan luego con replace_sentinels_with_null()."""
+    A = F.col(num_col)
+    B = F.col(den_col)
+    return (
+        F.when(A.isNull() & B.isNull(), F.lit(44444444444))
+        .when(A.isNull() & (B == 0), F.lit(6666666666))
+        .when(A.isNull() & (B > 0), F.lit(1111111111))
+        .when(A.isNull() & (B < 0), F.lit(-1111111111))
+        .when((A == 0) & B.isNull(), F.lit(7777777777))
+        .when((A == 0) & (B == 0), F.lit(5555555555))
+        .when(B.isNull() & (A > 0), F.lit(2222222222))
+        .when(B.isNull() & (A < 0), F.lit(-2222222222))
+        .when((B == 0) & (A > 0), F.lit(3333333333))
+        .when((B == 0) & (A < 0), F.lit(-3333333333))
+        .otherwise(F.round(A / B, 8))
+        .cast(DecimalType(19, 8))
+    )
+
 
 class UniversoImplementacion:
     """
-    Clase para la preparación de datos del Universo / Implementación.
-    Basada en el notebook 50_universo_implementacion.ipynb.
+    Preparación del Universo / Troncal Cliente para el modelo
+    model_xgboost_cap_24_mono_200.
+
+    Sigue la lógica de Notebook modelador Arnold: arma el troncal desde las tablas fuente,
+    deriva variables, limpia centinelas, renombra a nombres SAS, aplica los caps
+    del modelo (cap_24) y las transformaciones log. La tabla resultante queda
+    lista para scoreo con el .sashdat (los nombres de columna coinciden con los
+    que espera el modelo SAS).
     """
 
     def __init__(
@@ -36,6 +131,7 @@ class UniversoImplementacion:
         sink_schema: str,
         sink_table_portafolio_troncal: str,
         sink_table_hm_atraso: str,
+        path_mora_intrames: str = "catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_clientemoraintrames",
         verbosity: bool = True
     ):
         self.spark = spark
@@ -46,8 +142,8 @@ class UniversoImplementacion:
         # Paths derivados
         self.path_table_portfolio_troncal = f"{sink_catalog}.{sink_schema}.{sink_table_portafolio_troncal}"
         self.v_path_portfolio = f"{src_catalog}.{src_schema_portafolio}.{src_table_portafolio}"
-        # self.path_mora_intrames = f"{sink_catalog}.{sink_schema}.{sink_table_hm_atraso}"
-        self.path_mora_intrames = "catalog_lhcl_prod.bcp.bcp_ddv_adrmmgr_videsvariablesmodelos_vu.hm_clientemoraintrames"
+        # Fuente de mora intramés (ahora parametrizable)
+        self.path_mora_intrames = path_mora_intrames
 
         # Filtros de productos y sub-productos
         self.v_list_prod_no_rev = ['CONSUMO', 'HIPOTECARIO']
@@ -65,52 +161,49 @@ class UniversoImplementacion:
         self.v_flg_rev = self.v_filter_prod_tc
         self.v_flg_no_rev = col("CODPRODUCTONIVEL0RBM").isin(self.v_list_prod_no_rev)
 
-        # columnas en SELECT final
+        # ---------------------------------------------------------------------
+        # Columnas del SELECT final (contrato del modelo cap_24_mono_200)
+        # = llaves/metadata de producción + 28 features con nombre SAS.
+        # Se excluyen sample/selected/flg_gruyie/def*_12 (desarrollo).
+        # ---------------------------------------------------------------------
         self.mt_final_cols = [
-            # pks
+            # llaves / metadata
             'codmes',
             'codclavepartycli',
-            'codinternocomputacional',
             'codclaveunicocli',
-            # variables de seguimiento
+            'codinternocomputacional',
             'flgclictavalida',
-            'ctddiaatraso',
-            'max_maduracion_cli',
             'mtosaldocapitalsol',
-            'FLG_TC',
-            'FLG_TC_PERSONAS',
-            'FLG_CEF',
-            'FLG_VEH',
-            'FLG_HIP',
-            # variables de modelo
-            'ctdmora_intra_0_imp_cut15',
-            'max_maduracion_cli_imp150',
-            'max_mora_intra_u6m',
-            'exp_pct_evol_ship_u3m_rt_u6m_cua',
-            'prd_pct_pmpas_pmact_24_24_rt24a',
-            'fatc_pct_pag_mn_ctamin_u6m_rtu6',
-            'rcc_deu_ind_pj_prm_u3m_impt',
-            'rcc_pct_sf3_sf24_ship_rt_u24',
-            'rcc_pct_rdv_prm_u3ma',
-            'prd_prm_tsav_mnn_6_6_rt6a',
-            'mto_deu_mora_sol_u48_log',
-            'flg_titulo_c',
-            'q_diamora_max_100_u24a',
-            'ftc_flg_pg_ful_clant_sol_mx_u3_c',
-            'rcc_pct_sf12_sf24_rt_u24c',
-            'edad_cut',
-            'rcc_q_mes_act_sf_buen_mal_0_u3_3',
-            'evol_mora_intra_g3m_cut',
-            'ctdpdhu24_cut',
-            'pos_pct_q_etcnpscl_a_sum_u6_rt6',
-            'pos_tkt_trx_com_sol_prm_u3ma',
-            'grf_tip_clas_rie_cli_2_4_mx_u3m',
-            'isav_q_opea_desm_prm_u3m_cut',
-            'evol_deu_ship_max_u12m_u24_raw',
-            'grf_cvta_prov_rie4_prm_u3m',
+            'num_prod_per',
+            # features modelo (nombres SAS)
+            'ctdmora_intra_0_o',
+            'max_maduracion_cli',
+            'max_mora_intra_u6m_o',
+            'exp_pct_evol_ship_u3m_000',
+            'prd_pct_pmpas_pmact_2_000_o',
+            'fatc_pct_pag_mn_ctami_000_o',
+            'rcc_pct_sf3_sf24_ship_000',
+            'rcc_pct_rdv_prm_u3m_ooo',
+            'prd_prm_tsav_mnn_6_6_rt6_ooo',
+            'flg_titulo',
+            'q_diamora_max_100_u24_o',
+            'fatc_flg_pag_ful_clan_000',
+            'rcc_pct_sf12_sf24_rt_u24',
+            'edad_o',
+            'rcc_q_mes_act_sf_buen_000',
+            'max_mora_intra_g3m',
+            'ctdpdhu24_ooo',
+            'pos_pct_q_etcnpscl_a__000',
+            'grf_tip_clas_rie_cli__000',
+            'isav_q_opea_desm_prm_u3m_o',
+            'rcc_mto_deu_ship_max__000',
+            'grf_cvta_prov_rie4_pr_000',
             'prod_flg_sld_aho_300',
-            'q_mes_mto_tot_pgsrv_sol_m0_u3m',
-            'rcc_mto_gar_ope_cre_cut_logr'
+            'q_mes_mto_tot_pgsrv_s_000',
+            'mto_deu_mora_sol_u48_o_ln',
+            'rcc_mto_deu_ind_pj_pr_000_o_ln',
+            'pos_tkt_trx_com_sol_p_000_ooo_ln',
+            'rcc_mto_gar_ope_cre_o_ln',
         ]
 
     def execute(self):
@@ -119,7 +212,9 @@ class UniversoImplementacion:
         print(f"Mora intramés (desde 01) : {self.path_mora_intrames}")
         print(f"Tabla destino    : {self.path_table_portfolio_troncal}")
 
-        # Lectura del portafolio de créditos
+        # =====================================================================
+        # 1. Lectura del portafolio de créditos
+        # =====================================================================
         df_port_cta_rbm_per = self.spark.sql(f"""
         SELECT
             codmes,
@@ -170,63 +265,61 @@ class UniversoImplementacion:
         # Validación del portafolio
         if self.verbosity:
             print("=" * 50)
-            print("Summary of Portafolio credito by credits")
-            print(f"  Total records for {self.codmes_fin}      : {df_port_cta_rbm_per.filter(col('codmes')==self.codmes_fin).count():,}")
-            print(f"  Valid records for {self.codmes_fin}      : {df_port_cta_rbm_per.filter(col('codmes')==self.codmes_fin).filter(col('flgctavalida')=='1').count():,}")
+            print("Resumen de Portafolio Crédito por créditos")
+            print(f"  Total registros para {self.codmes_fin}      : {df_port_cta_rbm_per.filter(col('codmes')==self.codmes_fin).count():,}")
+            print(f"  Registros válidos para {self.codmes_fin}      : {df_port_cta_rbm_per.filter(col('codmes')==self.codmes_fin).filter(col('flgctavalida')=='1').count():,}")
             print("=" * 50)
-            print("Summary of Portafolio credito by customers")
-            print(f"  Unique customers     : {df_port_cta_rbm_per.filter(col('codmes')==self.codmes_fin).select('codclavepartycli').distinct().count():,}")
-            print(f"  Unique customers (cta valida): {df_port_cta_rbm_per.filter(col('codmes')==self.codmes_fin).filter(col('flgctavalida')=='1').select('codclavepartycli').distinct().count():,}")
+            print("Resumen de Portafolio Crédito por clientes")
+            print(f"  Clientes únicos     : {df_port_cta_rbm_per.filter(col('codmes')==self.codmes_fin).select('codclavepartycli').distinct().count():,}")
+            print(f"  Clientes únicos (cta valida): {df_port_cta_rbm_per.filter(col('codmes')==self.codmes_fin).filter(col('flgctavalida')=='1').select('codclavepartycli').distinct().count():,}")
 
-        # Agregación a nivel cliente-mes (dfPorto) OBS: Esta tabla sirve para CEF, HIP, TC y VEH
+        # =====================================================================
+        # 2. Agregación a nivel cliente-mes (df_porto) OBS: Esta tabla sirve para CEF, HIP, TC y VEH
+        # =====================================================================
         df_porto = df_port_cta_rbm_per.groupby("codclavepartycli", "codmes").agg(
             F.max(F.trim(F.col("codinternocomputacional"))).alias("codinternocomputacional"),
             F.coalesce(F.max(F.col("codclaveunicocli")), F.lit(None)).alias("codclaveunicocli"),
-            # --- Flag cliente con cuenta válida ---
             F.coalesce(F.max(F.when(F.col("flgctavalida") == "1", F.lit(1))), F.lit(0)).alias("flgclictavalida"),
-            # --- Cálculos solo con cuentas válidas ---
             F.coalesce(F.max(F.when(F.col("flgctavalida") == "1", F.col("ctddiaatraso"))), F.lit(0)).alias("ctddiaatraso"),
             F.coalesce(F.max(F.when(F.col("flgctavalida") == "1", F.col("ctdmesmaduracion"))), F.lit(0)).alias("max_maduracion_cli"),
             F.coalesce(F.sum(F.when(F.col("flgctavalida") == "1", F.col("mtosaldocapitalsol"))), F.lit(0)).alias("mtosaldocapitalsol"),
-            # --- Banderas solo con cuentas válidas ---
             F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_rev, F.lit(1))), F.lit(0)).alias("FLG_TC"),
             F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_rev, F.col("flgtarjetacreditoper"))), F.lit(0)).cast("int").alias("FLG_TC_PERSONAS"),
             F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_cef, F.lit(1))), F.lit(0)).alias("FLG_CEF"),
             F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_veh, F.lit(1))), F.lit(0)).alias("FLG_VEH"),
             F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_hip, F.lit(1))), F.lit(0)).alias("FLG_HIP"),
-
         )
 
         df_porto = df_porto.dropDuplicates(["codclaveunicocli", "codmes"])
         df_porto = df_porto.withColumn("fec_update", F.current_timestamp()) # OBS: fec_rutina o fec_registro en lugar de fec_update
-        df_porto = df_porto.withColumn("NUM_PROD_PER", col("FLG_TC_PERSONAS") + col("FLG_CEF") + col("FLG_VEH") + col("FLG_HIP"))
-
-        df_porto = df_porto.dropDuplicates(["codclaveunicocli", "codmes"])
-        df_porto = df_porto.withColumn("fec_update", F.current_timestamp()) # OBS: fec_rutina o fec_registro en lugar de fec_update
-        df_porto = df_porto.withColumn("NUM_PROD_PER", col("FLG_TC_PERSONAS") + col("FLG_CEF") + col("FLG_VEH") + col("FLG_HIP"))
+        df_porto = df_porto.withColumn(
+            "NUM_PROD_PER",
+            col("FLG_TC_PERSONAS") + col("FLG_CEF") + col("FLG_VEH") + col("FLG_HIP"),
+        )
 
         df_porto.persist(StorageLevel.MEMORY_AND_DISK)
         df_porto.count()
         df_port_cta_rbm_per.unpersist()
 
         # Resumen dfPorto
-        print_spark(
-            df_porto.filter(col("codmes") >= 202501)
-            .groupby("codmes")
-            .agg(
-                count("codclavepartycli").alias("NumOps"),
-                sum("mtosaldocapitalsol").cast("float").alias("mtosaldocapitalsol"),
+        if self.verbosity:
+            print_spark(
+                df_porto.filter(col("codmes") >= 202501)
+                .groupby("codmes")
+                .agg(
+                    count("codclavepartycli").alias("NumOps"),
+                    sum("mtosaldocapitalsol").cast("float").alias("mtosaldocapitalsol"),
+                )
+                .withColumn("mtosaldocapitalsol", col("mtosaldocapitalsol") / 1e6)
+                .orderBy(col("codmes").asc())
             )
-            .withColumn("mtosaldocapitalsol", col("mtosaldocapitalsol") / 1e6)
-            .orderBy(col("codmes").asc())
-        )
 
-
-        # Join con tablas de variables
+        # =====================================================================
+        # 3. Enriquecimiento con tablas de variables (crudo)
+        # =====================================================================
         VARIABLE_TABLES = [
             # 1. PDH RBM
             (
-                # "catalog_lhcl_prod_bcp.bcp_ddv_rbmrbmper_driverpdh_vu.hm_calculomarcaingresopdhrbm",
                 "catalog_cem_expl_bcp_prod.bcp_expl_mmgr_mlde.hm_calculomarcaingresopdhrbm_mlops",
                 ["ctdpdhu24"],
                 "codclavepartycli", 0, "pdhrbm",
@@ -237,61 +330,60 @@ class UniversoImplementacion:
                 ["rcc_mto_gar_ope_cre"],
                 "codclavepartycli", 0, "df_conceptodeudorrcc",
             ),
-            # 3. Grafo SUNEDU (desfase +1)
-            (
-                "catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_flujotrxcli_vu.hm_conceptografoingresosunedudigitalrbm",
-                ["mtoingresoinferidomedianaproveedorsol"],
-                "codclavepartycli", +1, "df_grafosunedu",
-            ),
-            # 4. Concepto resumen saldo (desfase +1)
+            # 3. Concepto resumen saldo (desfase +1)
             (
                 "catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_conceptoresumensaldo",
                 ["prod_flg_sld_aho_300"],
                 "codclavepartycli", +1, "df_cptoresumensaldo",
             ),
-            # 5. Matriz demográfica
+            # 4. Matriz demográfica
             (
                 "catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matrizdemografico",
                 ["dem_fec_nacimiento"],
                 "codclavepartycli", 0, "df_mtxdemografico",
             ),
-            # 6. Deudor RCC otra deuda (join por codclaveunicocli)
+            # 5. Deudor RCC otra deuda (join por codclaveunicocli)
             (
                 "catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matrizdeudorrccotradeuda",
                 ["rcc_pct_rdv_prm_u3m"],
                 "codclaveunicocli", 0, "df_mtxdeudor_rcc_odeuda",
             ),
-            # 7. Deudor RCC producto
+            # 6. Deudor RCC producto
             (
                 "catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matrizdeudorrccproducto",
                 [
                     "rcc_mto_deu_ind_pj_prm_u3m",
                     "rcc_pct_sf3_sf24_ship_rt_u24",
                     "rcc_pct_sf12_sf24_rt_u24",
-                    "rcc_mto_deu_prod_sum_u24",
                     "rcc_ctd_mes_act_sf_buen_mal_0_u3m",
                     "rcc_mto_deu_ship_max_u12",
                     "rcc_mto_deu_ship_max_u24",
                 ],
                 "codclavepartycli", 0, "df_mtxdeudor_rccproducto",
             ),
-            # 8. Experiencia cliente
+            # 7. Experiencia cliente
             (
                 "catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matrizexperienciacliente",
                 ["exp_pct_evol_ship_u3m_rt_u6m", "exp_ctd_diamora_max_100_u24"],
                 "codclavepartycli", 0, "df_mtx_expcli",
             ),
-            # 9. Facturación tarjeta (join por codclaveunicocli)
+            # 8. Facturación tarjeta (join por codclaveunicocli)
             (
                 "catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matrizfacturaciontarjeta",
                 ["fatc_flg_pag_ful_cclant_sol_max_u3m"],
                 "codclaveunicocli", 0, "df_mtx_fact_tc",
             ),
-            # 10. Facturación transacción tarjeta
+            # 9. Facturación transacción tarjeta
             (
                 "catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matrizfacturaciontransacciontarjeta",
                 ["fatc_pct_pag_min_ctamin_u6m_rt_u6m"],
                 "codclavepartycli", 0, "df_mtx_fact_tx_tc",
+            ),
+            # 10. Grafo interacción banca (desfase +1)
+            (
+                "catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_flujotrxcli_vu.hm_matrizgrafointeraccionbanca",
+                ["grf_pct_tip_clas_rie_sbs_cli_2_4_max_u3m"],
+                "codclavepartycli", +1, "df_mtx_grfitx_banca",
             ),
             # 11. Grafo atributo cliente banca (desfase +1)
             (
@@ -299,49 +391,43 @@ class UniversoImplementacion:
                 ["grf_pct_cto_vta_prov_def_tip_clas_rie_sbs_4_prm_u3m"],
                 "codclavepartycli", +1, "df_mtx_grfatrib_cli",
             ),
-            # 12. Grafo interacción banca (desfase +1)
-            (
-                "catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_flujotrxcli_vu.hm_matrizgrafointeraccionbanca",
-                ["grf_pct_tip_clas_rie_sbs_cli_2_4_max_u3m"],
-                "codclavepartycli", +1, "df_mtx_grfitx_banca",
-            ),
-            # 13. Mora ponderada (desfase +1)
+            # 12. Mora ponderada (desfase +1)
             (
                 "catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_matrizmoraponderadaclientemmgr",
                 ["mtodeudadiamorafactordsctosolu48"],
                 "codclavepartycli", +1, "df_mtx_moraponderada",
             ),
-            # 14. Movimiento abono pasivo
+            # 13. Movimiento abono pasivo
             (
                 "catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matrizmovimientoabonopasivo",
                 ["isav_ctd_opea_desm_prm_u3m"],
                 "codclavepartycli", 0, "df_mtx_movabonopasivo",
             ),
-            # 15. Pago servicios (desfase +1)
+            # 14. Pago servicios (desfase +1)
             (
                 "catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_trxcomportamiento_vu.hm_matrizpagoservicioclienterbm",
                 ["ctdmesmtototalpagoservsolmay0u3m"],
                 "codclavepartycli", +1, "df_mtx_pagoservicios",
             ),
-            # 16. Resumen saldo activo/pasivo (desfase +1)
+            # 15. Resumen saldo activo/pasivo (desfase +1)
             (
                 "catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matrizresumensaldoactivopasivo",
                 ["prod_pct_pmpas_pmact_24_24_rt_u24", "prod_mto_sld_prm_tsav_min_6_6_rt_u6m"],
                 "codclavepartycli", +1, "df_mtx_saldo_pas_act",
             ),
-            # 17. Transacciones POS (join por codclaveunicocli)
+            # 16. Transacciones POS (join por codclaveunicocli)
             (
                 "catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matriztransaccionpos",
                 ["pos_tkt_trx_com_sol_prm_u3m"],
                 "codclaveunicocli", 0, "df_mtx_trx_pos",
             ),
-            # 18. Transacciones POS otro establecimiento
+            # 17. Transacciones POS otro establecimiento
             (
                 "catalog_lhcl_prod_bcp.bcp_ddv_matrizvariables_vu.hm_matriztransaccionposotroestablecimiento",
                 ["pos_pct_ctd_etcnpscl_a_sum_u6m_rt_u6m"],
                 "codclavepartycli", 0, "df_mtx_trx_pos_ot_establ",
             ),
-            # 19. Nivel educativo (desfase +1)
+            # 18. Nivel educativo (desfase +1)
             (
                 "catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_niveledusuperior_vu.hm_niveleducativoclienteadr",
                 [
@@ -352,12 +438,12 @@ class UniversoImplementacion:
                 ],
                 "codclavepartycli", +1, "df_nivel_educativo",
             ),
-            # 20. Mora intrames
+            # 19. Mora intramés (ahora trae las pre-agregadas u3m/p3m/u6m + nivel)
             (
                 f"{self.path_mora_intrames}",
-                ["ctdnivmoracli", "ctdmaxatrasou6m", "ctdevoatrasog3m"],
-                "codclavepartycli", 0, "df_mora_intrames"
-            )
+                ["ctdnivmoracli", "ctdmaxatrasou3m", "ctdmaxatrasop3m", "ctdmaxatrasou6m"],
+                "codclavepartycli", 0, "df_mora_intrames",
+            ),
         ]
 
         # Ejecutar todos los joins
@@ -390,296 +476,84 @@ class UniversoImplementacion:
                 JOIN_KEYS, "left"
             )
 
-        # Reemplazo de dummies en columnas numéricas
-        dummyList = [1111111111, -1111111111, 2222222222, -2222222222,
-                     3333333333, -3333333333, 4444444444, 5555555555, 6666666666, 7777777777]
-        colsNums = [f.name for f in df_final.schema.fields if isinstance(f.dataType, NumericType)]
-        df_final = df_final.replace(dummyList, None, subset=colsNums)
+        # =====================================================================
+        # 4. CAPA DE MODELO
+        # =====================================================================
 
-        # Construcción de variable ctdmora_intra_0_imp_cut15 (1)
-        df_final = df_final.withColumnRenamed("ctdnivmoracli", "ctdmora_intra_0_imp_cut15")
+        # (A) Alias: columnas fuente -> nombres de modelo (celda 18)
+        df_final = rename_columns_safe(df_final, SOURCE_TO_MODEL)
 
-        # Construcción de variable max_maduracion_cli_imp150 (2)
-        df_final = (
-            df_final
-            .withColumn(
-                "max_maduracion_cli_imp",
-                F.when(
-                    F.col("max_maduracion_cli").isNull(),
-                    F.lit(0.0))
-                .otherwise(F.col("max_maduracion_cli")))
-            .withColumn(
-                "max_maduracion_cli_imp150",
-                F.greatest(F.least(F.lit(150.0), F.col("max_maduracion_cli_imp")), F.lit(1.0)))
-        )
-
-        # Construcción de variable max_mora_intra_u6m (3)
-        df_final = df_final.withColumnRenamed("ctdmaxatrasou6m", "max_mora_intra_u6m")
-
-        # Construcción de variable exp_pct_evol_ship_u3m_rt_u6m_cua (4)
-        df_final = (
-            df_final
-            .withColumn(
-                "exp_pct_evol_ship_u3m_rt_u6m_cua",
-                F.when(F.col("exp_pct_evol_ship_u3m_rt_u6m").isNotNull(),
-                F.greatest(
-                    F.least(F.lit(2.0), F.col("exp_pct_evol_ship_u3m_rt_u6m")),
-                    F.lit(0.2494651) ) ) )
-        )
-
-        # Construcción de variable prd_pct_pmpas_pmact_24_24_rt24a (5)
-        df_final = (
-            df_final
-            .withColumn(
-                "prd_pct_pmpas_pmact_24_24_rt24a",
-                F.when(F.col("prod_pct_pmpas_pmact_24_24_rt_u24").isNotNull(),
-                F.greatest(
-                    F.least(F.lit(258.9774935), F.col("prod_pct_pmpas_pmact_24_24_rt_u24")),
-                    F.lit(0.15571) ) ) )
-        )
-
-        # Construcción de variable fatc_pct_pag_mn_ctamin_u6m_rtu6 (6)
-        df_final = (
-            df_final
-            .withColumn(
-                "fatc_pct_pag_mn_ctamin_u6m_rtu6",
-                F.when(F.col("fatc_pct_pag_min_ctamin_u6m_rt_u6m").isNotNull(),
-                F.greatest(
-                    F.least(F.lit(39.7449704), F.col("fatc_pct_pag_min_ctamin_u6m_rt_u6m")),
-                    F.lit(0.105) ) ) )
-        )
-
-        # Construcción de variable rcc_deu_ind_pj_prm_u3m_impt (7)
-        df_final = (
-            df_final
-            .withColumn(
-                "rcc_deu_ind_pj_prm_u3m_imp",
-                F.when(F.col("rcc_mto_deu_ind_pj_prm_u3m").isNull(), 0)
-                .otherwise(F.col("rcc_mto_deu_ind_pj_prm_u3m")) )
-            .withColumn(
-                "rcc_deu_ind_pj_prm_u3m_impt",
-                F.greatest(
-                    F.least(F.lit(224813.35), F.col("rcc_deu_ind_pj_prm_u3m_imp")),
-                    F.lit(0.0)) ) )
-        
-        # Construcción de variable rcc_pct_sf3_sf24_ship_rt_24 (8)
-        # No aplica
-
-        # Construcción de variable rcc_pct_rdv_prm_u3ma (9)
-        df_final = (
-            df_final
-            .withColumn(
-                "rcc_pct_rdv_prm_u3ma",
-                F.when(
-                    F.col("rcc_pct_rdv_prm_u3m").isNotNull(),
-                    F.greatest(
-                        F.least(F.lit(0.03), F.col("rcc_pct_rdv_prm_u3m")),
-                        F.lit(0.00264)) ) ) )
-
-        # Construcción de variable prd_prm_tsav_mnn_6_6_rt6a (10)
+        # (B) Derivaciones (celdas 24, 26, 27, 28, 29)
+        # --- edad (celda 24) ---
+        ref_date = F.last_day(F.to_date(F.col("codmes").cast("string"), "yyyyMM"))
         df_final = df_final.withColumn(
-            "prd_prm_tsav_mnn_6_6_rt6a",
-            F.when(
-                F.col("prod_mto_sld_prm_tsav_min_6_6_rt_u6m").isNotNull(),
-                F.greatest(F.lit(0.0010812), F.least(F.lit(0.8), F.col("prod_mto_sld_prm_tsav_min_6_6_rt_u6m")))
-            ).otherwise(F.lit(None))
-        )
+            "edad",
+            F.when(F.col("dem_fec_nacimiento").isNull(), F.lit(None).cast("int"))
+            .when(F.col("dem_fec_nacimiento") > ref_date, F.lit(None).cast("int"))
+            .otherwise(F.floor(F.months_between(ref_date, F.col("dem_fec_nacimiento")) / F.lit(12))),
+        ).drop("dem_fec_nacimiento")
 
-        # Construcción de variable mto_deu_mora_sol_u48_log (11)
+        # --- max_mora_intra_g3m = ratio u3m/p3m (celda 26) ---
         df_final = df_final.withColumn(
-            "mto_deu_mora_sol_u48_cut",
-            F.when(
-                F.col("mtodeudadiamorafactordsctosolu48").isNotNull(),
-                F.greatest(F.lit(0), F.least(F.lit(105000), F.col("mtodeudadiamorafactordsctosolu48")))
-            ).otherwise(F.lit(None))
-        ).withColumn(
-            "mto_deu_mora_sol_u48_log",
-            F.when(F.col("mto_deu_mora_sol_u48_cut").isNotNull(), F.log1p(F.col("mto_deu_mora_sol_u48_cut"))).otherwise(F.lit(None))
+            "max_mora_intra_g3m",
+            _ratio_with_sentinels("max_mora_intra_u3m", "max_mora_intra_p3m"),
         )
 
-        # Construcción de variable flg_titulo_c (12)
+        # --- flg_titulo (celda 27) ---
         df_final = df_final.withColumn(
             "flg_titulo",
             F.when(
-                (F.col("flgniveleducativobachiller") == "1") |
-                (F.col("flgniveleducativodoctorado") == "1") |
-                (F.col("flgniveleducativomaestria") == "1") |
-                (F.col("flgniveleducativotitulado") == "1"),
-                F.lit(1)
-            ).otherwise(F.lit(0))
-        ).withColumn(
-            "flg_titulo_c",
-            F.col("flg_titulo").cast("string")
+                (F.col("flgniveleducativobachiller").cast("string") == F.lit("1"))
+                | (F.col("flgniveleducativodoctorado").cast("string") == F.lit("1"))
+                | (F.col("flgniveleducativomaestria").cast("string") == F.lit("1"))
+                | (F.col("flgniveleducativotitulado").cast("string") == F.lit("1")),
+                F.lit("1"),
+            ).otherwise(F.lit("0")),
         )
 
-        # Construcción de variable q_diamora_max_100_u24a (13)
+        # --- rcc_mto_deu_ship_max_u12_u24 = ratio u12/u24 (celda 28) ---
         df_final = df_final.withColumn(
-            "q_diamora_max_100_u24a",
-            F.when(
-                F.col("exp_ctd_diamora_max_100_u24").isNotNull(),
-                F.greatest(F.lit(0), F.least(F.lit(27), F.col("exp_ctd_diamora_max_100_u24")))
-            ).otherwise(F.lit(None))
+            "rcc_mto_deu_ship_max_u12_u24",
+            _ratio_with_sentinels("rcc_mto_deu_ship_max_u12", "rcc_mto_deu_ship_max_u24"),
         )
 
-        # Construcción de variable ftc_flg_pag_ful_clant_sol_mx_u3_c (14)
+        # --- fatc flag -> string (celda 29) ---
         df_final = df_final.withColumn(
-            "ftc_flg_pag_ful_clant_sol_mx_u3_c",
-            F.col("fatc_flg_pag_ful_cclant_sol_max_u3m").cast("string")
+            "fatc_flg_pag_ful_clant_sol_mx_u3",
+            F.round(F.col("fatc_flg_pag_ful_clant_sol_mx_u3")).cast("int").cast("string"),
         )
 
-        df_final = df_final.fillna(".", subset=['ftc_flg_pg_ful_clant_sol_mx_u3_c']) # OBS: SAS espera "." en lugar de null
+        # (C) Limpieza de centinelas y decimales (celda 30)
+        df_final = replace_sentinels_with_null(self.spark, df_final)
+        df_final = decimals_to_double(self.spark, df_final)
 
-        # Construcción de variable rcc_pct_sf12_sf24_rt_u24c (15)
-        df_final = df_final.withColumn(
-            "rcc_pct_sf12_sf24_rt_u24c",
-            F.when(
-                F.col("rcc_pct_sf12_sf24_rt_u24").isNotNull(),
-                F.greatest(F.lit(0.2225584), F.least(F.lit(2.0), F.col("rcc_pct_sf12_sf24_rt_u24")))
-            ).otherwise(F.lit(None))
-        )
+        # (D) Renombrado a nombres SAS (celda 19/30)
+        df_final = rename_columns_safe(df_final, DICT_NAMES_SAS)
 
-        # Construcción de variable edad_cut (16)
-        df_final = df_final.withColumn(
-            "edad",
-            F.round(
-                (
-                    (F.floor(F.col("codmes") / 100) * F.lit(12) + (F.col("codmes") % F.lit(100))) -
-                    (F.month("dem_fec_nacimiento") + F.year("dem_fec_nacimiento") * F.lit(12))
-                ) / F.lit(12.0),
-                1
+        # (E) Caps del modelo cap_24 (celda 3/31)
+        df_final = apply_caps_xgb_cap24(df_final)
+
+        # (F) Transformaciones log (celda 32)
+        for c in [
+            "mto_deu_mora_sol_u48_o",
+            "pos_tkt_trx_com_sol_p_000_ooo",
+            "rcc_mto_deu_ind_pj_pr_000_o",
+            "rcc_mto_gar_ope_cre_o",
+        ]:
+            df_final = df_final.withColumn(
+                c + "_ln",
+                F.when(F.col(c).isNotNull(), F.log1p(F.col(c))),
             )
-        )
 
-        df_final = df_final.withColumn(
-            "edad_cut",
-            F.when(
-                F.col("edad").isNotNull(),
-                F.greatest(F.lit(22.0), F.least(F.lit(65.0), F.col("edad")))
-            ).otherwise(F.lit(None))
-        )
-
-        df_final = df_final.withColumn( "edad_cut", F.round(F.col("edad_cut"), 0) ) # OBS: SAS redondea a enteros esta columna
-
-        # Construcción de variable rcc_q_mes_act_sf_buen_mal_0_u3_3 (17)
-        df_final = df_final.withColumn(
-            "rcc_q_mes_act_sf_buen_mal_0_u3_3",
-            F.when(
-                F.col("rcc_ctd_mes_act_sf_buen_mal_0_u3m").isNotNull(),
-                F.greatest(F.lit(-3), F.least(F.lit(3), F.col("rcc_ctd_mes_act_sf_buen_mal_0_u3m")))
-            ).otherwise(F.lit(None))
-        )
-
-        # Construcción de variable evol_mora_intra_g3m_cut (18)
-        df_final = df_final.withColumnRenamed("ctdevoatrasog3m", "evol_mora_intra_g3m_cut")
-
-        # Construcción de variable ctdpdhu24_cut (19)
-        df_final = df_final.withColumn(
-            "ctdpdhu24",
-            F.when(F.col("ctdpdhu24").isNull() | (F.col("ctdpdhu24") < 1), F.lit(0)).otherwise(F.col("ctdpdhu24"))
-        )
-        df_final = df_final.withColumn(
-            "ctdpdhu24_cut",
-            F.ceil(F.col("ctdpdhu24") / 2) * 2
-        )
-
-        # Construcción de variable pos_pct_q_etcnpscl_a_sum_u6_rt6 (20)
-        df_final = df_final.withColumn('pos_pct_q_etcnpscl_a_sum_u6_rt6', F.col('pos_pct_ctd_etcnpscl_a_sum_u6m_rt_u6m'))
-
-        # Construcción de variable pos_tkt_trx_com_sol_prm_u3ma (21)
-        df_final = df_final.withColumn(
-            "pos_tkt_trx_com_sol_prm_u3ma",
-            F.when(
-                F.col("pos_tkt_trx_com_sol_prm_u3m").isNotNull(),
-                F.greatest(F.lit(19.38888), F.least(F.lit(90.0), F.col("pos_tkt_trx_com_sol_prm_u3m")))
-            ).otherwise(F.lit(None))
-        )
-
-        # Construcción de variable grf_tip_clas_rie_cli_2_4_mx_u3m (22)
-        df_final = df_final.withColumn(
-            "grf_tip_clas_rie_cli_2_4_mx_u3m",
-            F.col("grf_pct_tip_clas_rie_sbs_cli_2_4_max_u3m")
-        )
-
-        # Construcción de variable isav_q_opea_desm_prm_u3m_cut (23)
-        df_final = (
-            df_final
-            .withColumn(
-                "isav_ctd_opea_desm_prm_u3m",
-                F.when(F.col("isav_ctd_opea_desm_prm_u3m").isNull(), F.lit(0.0)).otherwise(F.col("isav_ctd_opea_desm_prm_u3m"))
-            )
-            .withColumn(
-                "isav_q_opea_desm_prm_u3m_cut",
-                F.when(
-                    F.col("isav_ctd_opea_desm_prm_u3m").isNotNull(),
-                    F.greatest(F.lit(0.0), F.least(F.lit(2.0), F.col("isav_ctd_opea_desm_prm_u3m")))
-                ).otherwise(F.lit(None))
-            )
-        )
-
-        # Construcción de variable evol_deu_ship_max_u12m_u24_raw (24)
-        df_final = (
-            df_final
-            .withColumn(
-                "rcc_deu_ship_max_u12_imp",
-                F.when(F.col("rcc_mto_deu_ship_max_u12").isNull() | (F.col("rcc_mto_deu_ship_max_u12") < 100.0), F.lit(100.0))
-                .otherwise(F.col("rcc_mto_deu_ship_max_u12"))
-            )
-            .withColumn(
-                "rcc_deu_ship_max_u24_imp",
-                F.when(F.col("rcc_mto_deu_ship_max_u24").isNull() | (F.col("rcc_mto_deu_ship_max_u24") < 100.0), F.lit(100.0))
-                .otherwise(F.col("rcc_mto_deu_ship_max_u24"))
-            )
-            .withColumn(
-                "evol_deu_ship_max_u12m_u24_raw",
-                F.col("rcc_deu_ship_max_u12_imp") / F.col("rcc_deu_ship_max_u24_imp")
-            )
-        )
-
-        # Construcción de variable grf_cvta_prov_rie4_prm_u3m (25)
-        df_final = df_final.withColumn(
-            "grf_cvta_prov_rie4_prm_u3m",
-            F.col("grf_pct_cto_vta_prov_def_tip_clas_rie_sbs_4_prm_u3m")
-        )
-
-        # Construcción de variable prod_flg_sld_aho_300 (26)
-        # No aplica
-
-        # Construcción de variable q_mes_mto_tot_pgsrv_sol_m0_u3m (27)
-        df_final = df_final.withColumn(
-            "q_mes_mto_tot_pgsrv_sol_m0_u3m",
-            F.col("ctdmesmtototalpagoservsolmay0u3m")
-        )
-
-        # Construcción de variable rcc_mto_gar_ope_cre_cut_logr (28)
-        df_final = (
-            df_final
-            .withColumn(
-                "rcc_mto_gar_ope_cre_cut",
-                F.when(
-                    F.col("rcc_mto_gar_ope_cre").isNotNull(),
-                    F.greatest(F.lit(0.0), F.least(F.lit(2_000_000.0), F.col("rcc_mto_gar_ope_cre")))
-                ).otherwise(F.lit(None))
-            )
-            .withColumn(
-                "rcc_mto_gar_ope_cre_cut_log",
-                F.when(F.col("rcc_mto_gar_ope_cre_cut").isNotNull(), F.log1p(F.col("rcc_mto_gar_ope_cre_cut")))
-                .otherwise(F.lit(None))
-            )
-            .withColumn(
-                "rcc_mto_gar_ope_cre_cut_logr",
-                F.when(
-                    F.col("rcc_mto_gar_ope_cre_cut_log").isNotNull(),
-                    F.greatest(F.lit(9.68), F.least(F.lit(14.5), F.col("rcc_mto_gar_ope_cre_cut_log")))
-                ).otherwise(F.lit(None))
-            )
-        )
-
-        # Selección de las columnas indispensables para los procesos posteriores
+        # (G) Selección final (contrato del modelo)
+        df_final = df_final.withColumnRenamed("NUM_PROD_PER", "num_prod_per")
         df_final = df_final.select(*self.mt_final_cols)
 
         print(f"✅ df_final construido con {len(df_final.columns)} columnas")
 
-        # Escritura a Unity Catalog
+        # =====================================================================
+        # 5. Escritura a Unity Catalog
+        # =====================================================================
         write_to_unity_catalog(
             df=df_final,
             table_name=self.path_table_portfolio_troncal,
@@ -688,5 +562,5 @@ class UniversoImplementacion:
             overwrite_partition=True,
         )
 
-        print(f"df_final registrado")
+        print("df_final registrado")
         df_porto.unpersist()
