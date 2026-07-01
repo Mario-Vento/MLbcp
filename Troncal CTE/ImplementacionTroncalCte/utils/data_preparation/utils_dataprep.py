@@ -1,6 +1,6 @@
 from pyspark.storagelevel import StorageLevel
 from pyspark.sql import functions as F
-from pyspark.sql.types import NumericType, DecimalType
+from pyspark.sql.types import *
 
 def write_to_unity_catalog(
     df,
@@ -95,46 +95,49 @@ def join_variable_table(
 # Helpers portados desde el Utils de Notebook de Modelador Arnold + apply_unified.
 # =================================================================================
 
-# Valores centinela usados como indicadores de missing (incluye los que
-# generan los ratios max_mora_intra_g3m y rcc_mto_deu_ship_max_u12_u24).
-SENTINELS_DEFAULT = [
-    1111111111, -1111111111,
-    2222222222, -2222222222,
-    3333333333, -3333333333,
-    4444444444, 44444444444,
-    5555555555,
-    6666666666,
-    7777777777,
-]
-
-
 def replace_sentinels_with_null(spark, df, sentinels=None):
-    """Reemplaza valores centinela por NULL en todas las columnas numéricas.
-    Compara en double para soportar long y decimal sin problemas de tipo."""
+    """
+    Reemplaza valores centinela por null en todas las columnas numéricas.
+    IDÉNTICA a Arnold_UTILS. La lista por defecto incluye 99999 y NO incluye
+    44444444444 (ese caso — u3m y p3m ambos null — se conserva a propósito).
+    """
     if sentinels is None:
-        sentinels = SENTINELS_DEFAULT
-    sset = [float(s) for s in sentinels]
-    num_cols = [f.name for f in df.schema.fields if isinstance(f.dataType, NumericType)]
-    for c in num_cols:
-        df = df.withColumn(
-            c,
-            F.when(F.col(c).cast("double").isin(sset), F.lit(None)).otherwise(F.col(c)),
+        sentinels = (
+            1111111111, -1111111111,
+            2222222222, -2222222222,
+            3333333333, -3333333333,
+            4444444444,
+            5555555555,
+            6666666666,
+            7777777777,
+            99999,
         )
-    return df
+
+    numeric_types = (
+        ByteType, ShortType, IntegerType, LongType,
+        FloatType, DoubleType, DecimalType
+    )
+
+    numeric_cols = [f.name for f in df.schema.fields if isinstance(f.dataType, numeric_types)]
+    if not numeric_cols:
+        return df
+
+    return df.na.replace(list(sentinels), None, subset=numeric_cols)
 
 
 def decimals_to_double(spark, df):
-    """Convierte toda columna DecimalType a double (evita problemas de escala
-    aguas abajo y empata con lo que espera el scoreo SAS)."""
-    for f in df.schema.fields:
-        if isinstance(f.dataType, DecimalType):
-            df = df.withColumn(f.name, F.col(f.name).cast("double"))
-    return df
+    """Convierte columnas DecimalType a double preservando nombres y orden.
+    IDÉNTICA a Arnold_UTILS."""
+    decimal_cols = {f.name for f in df.schema.fields if isinstance(f.dataType, DecimalType)}
+    return df.select([
+        F.col(f.name).cast(DoubleType()).alias(f.name) if f.name in decimal_cols else F.col(f.name)
+        for f in df.schema.fields
+    ])
 
 
 def rename_columns_safe(df, mapping: dict):
-    """Renombra columnas según mapping {viejo: nuevo}, ignorando las que no
-    existen y los renombrados identidad."""
+    """Rename por diccionario {viejo: nuevo}. Equivale al rename_columns_safe
+    que usa ArnoldNotebook celda 30. Ignora columnas ausentes e identidades."""
     for old, new in mapping.items():
         if old in df.columns and old != new:
             df = df.withColumnRenamed(old, new)
@@ -142,9 +145,8 @@ def rename_columns_safe(df, mapping: dict):
 
 
 def apply_caps_xgb_cap24(df):
-    """Caps del modelo model_xgboost_cap_24_mono_200 (ArnoldNotebook celda 3,
-    apply_unified). Debe ejecutarse DESPUÉS de rename_columns_safe(DICT_NAMES_SAS),
-    porque referencia los nombres SAS."""
+    """Caps del modelo model_xgboost_cap_24_mono_200 (= apply_unified,
+    ArnoldNotebook). Debe correr DESPUÉS de rename_columns_safe(dict_names_sas)."""
     df = df.withColumn('ctdmora_intra_0_o', F.when(F.col('ctdmora_intra_0').isNull(), F.lit(None)).otherwise(F.least(F.greatest(F.col('ctdmora_intra_0'), F.lit(1)), F.lit(30))).cast('double'))
 
     df = df.withColumn('max_mora_intra_u6m_o', F.when(F.col('max_mora_intra_u6m').isNull(), F.lit(None)).otherwise(F.least(F.greatest(F.col('max_mora_intra_u6m'), F.lit(1)), F.lit(32))).cast('double'))
