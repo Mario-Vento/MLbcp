@@ -87,7 +87,7 @@ SOURCE_TO_MODEL = {
 
 
 def _ratio_with_sentinels(num_col: str, den_col: str) -> Column:
-    """Ratio A/B con valores centinela (ArnoldNotebook celdas 26 y 28).
+    """Ratio A/B con valores centinela (ArnoldNotebook).
     Los centinelas se anulan luego con replace_sentinels_with_null()."""
     A = F.col(num_col)
     B = F.col(den_col)
@@ -131,8 +131,8 @@ class UniversoImplementacion:
         sink_schema: str,
         sink_table_portafolio_troncal: str,
         sink_table_hm_atraso: str,
-        path_mora_intrames: str = "catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_clientemoraintrames",
-        verbosity: bool = True
+        path_mora_intrames: str = "catalog_lhcl_prod.bcp.bcp_ddv_adrmmgr_videsvariablesmodelos_vu.hm_clientemoraintrames",
+        verbosity: bool = True,
     ):
         self.spark = spark
         self.codmes_ini = int(codmes_ini)
@@ -200,10 +200,6 @@ class UniversoImplementacion:
             'grf_cvta_prov_rie4_pr_000',
             'prod_flg_sld_aho_300',
             'q_mes_mto_tot_pgsrv_s_000',
-            'mto_deu_mora_sol_u48_o_ln',
-            'rcc_mto_deu_ind_pj_pr_000_o_ln',
-            'pos_tkt_trx_com_sol_p_000_ooo_ln',
-            'rcc_mto_gar_ope_cre_o_ln',
         ]
 
     def execute(self):
@@ -265,13 +261,13 @@ class UniversoImplementacion:
         # Validación del portafolio
         if self.verbosity:
             print("=" * 50)
-            print("Resumen de Portafolio Crédito por créditos")
-            print(f"  Total registros para {self.codmes_fin}      : {df_port_cta_rbm_per.filter(col('codmes')==self.codmes_fin).count():,}")
-            print(f"  Registros válidos para {self.codmes_fin}      : {df_port_cta_rbm_per.filter(col('codmes')==self.codmes_fin).filter(col('flgctavalida')=='1').count():,}")
+            print("Summary of Portafolio credito by credits")
+            print(f"  Total records for {self.codmes_fin}      : {df_port_cta_rbm_per.filter(col('codmes')==self.codmes_fin).count():,}")
+            print(f"  Valid records for {self.codmes_fin}      : {df_port_cta_rbm_per.filter(col('codmes')==self.codmes_fin).filter(col('flgctavalida')=='1').count():,}")
             print("=" * 50)
-            print("Resumen de Portafolio Crédito por clientes")
-            print(f"  Clientes únicos     : {df_port_cta_rbm_per.filter(col('codmes')==self.codmes_fin).select('codclavepartycli').distinct().count():,}")
-            print(f"  Clientes únicos (cta valida): {df_port_cta_rbm_per.filter(col('codmes')==self.codmes_fin).filter(col('flgctavalida')=='1').select('codclavepartycli').distinct().count():,}")
+            print("Summary of Portafolio credito by customers")
+            print(f"  Unique customers     : {df_port_cta_rbm_per.filter(col('codmes')==self.codmes_fin).select('codclavepartycli').distinct().count():,}")
+            print(f"  Unique customers (cta valida): {df_port_cta_rbm_per.filter(col('codmes')==self.codmes_fin).filter(col('flgctavalida')=='1').select('codclavepartycli').distinct().count():,}")
 
         # =====================================================================
         # 2. Agregación a nivel cliente-mes (df_porto) OBS: Esta tabla sirve para CEF, HIP, TC y VEH
@@ -291,7 +287,7 @@ class UniversoImplementacion:
         )
 
         df_porto = df_porto.dropDuplicates(["codclaveunicocli", "codmes"])
-        df_porto = df_porto.withColumn("fec_update", F.current_timestamp()) # OBS: fec_rutina o fec_registro en lugar de fec_update
+        df_porto = df_porto.withColumn("fec_update", F.current_timestamp())
         df_porto = df_porto.withColumn(
             "NUM_PROD_PER",
             col("FLG_TC_PERSONAS") + col("FLG_CEF") + col("FLG_VEH") + col("FLG_HIP"),
@@ -301,7 +297,6 @@ class UniversoImplementacion:
         df_porto.count()
         df_port_cta_rbm_per.unpersist()
 
-        # Resumen dfPorto
         if self.verbosity:
             print_spark(
                 df_porto.filter(col("codmes") >= 202501)
@@ -446,7 +441,6 @@ class UniversoImplementacion:
             ),
         ]
 
-        # Ejecutar todos los joins
         print("=" * 60)
         print("Enriqueciendo con tablas de variables...")
         print("=" * 60)
@@ -464,16 +458,12 @@ class UniversoImplementacion:
                 persist=False,
             )
 
-        # Join final: unir todas las tablas enriquecidas
-        JOIN_KEYS = ["codmes", "codclavepartycli"] # funciona porque cada enriched_dfs[name] contiene "codclavepartycli" independientemente del argumento en join_key en la función join_variable_table()
-
+        JOIN_KEYS = ["codmes", "codclavepartycli"]
         df_final = df_porto.dropDuplicates(JOIN_KEYS)
-
-        # Todas las tablas de variables
         for _, _, _, _, name in VARIABLE_TABLES:
             df_final = df_final.join(
                 enriched_dfs[name].dropDuplicates(JOIN_KEYS).drop("codclaveunicocli"),
-                JOIN_KEYS, "left"
+                JOIN_KEYS, "left",
             )
 
         # =====================================================================
@@ -482,6 +472,12 @@ class UniversoImplementacion:
 
         # (A) Alias: columnas fuente -> nombres de modelo (celda 18)
         df_final = rename_columns_safe(df_final, SOURCE_TO_MODEL)
+
+        # (B0) Limpieza de dummies en CRUDO (equivale al dummyList original).
+        #      Debe correr ANTES de las derivaciones, para que los ratios
+        #      max_mora_intra_g3m (u3m/p3m) y rcc_mto_deu_ship_max_u12_u24 (u12/u24)
+        #      no se calculen sobre valores dummy.
+        df_final = replace_sentinels_with_null(self.spark, df_final)
 
         # (B) Derivaciones (celdas 24, 26, 27, 28, 29)
         # --- edad (celda 24) ---
@@ -523,7 +519,7 @@ class UniversoImplementacion:
             F.round(F.col("fatc_flg_pag_ful_clant_sol_mx_u3")).cast("int").cast("string"),
         )
 
-        # (C) Limpieza de centinelas y decimales (celda 30)
+        # (C) Limpieza de los centinelas que generan los ratios + decimales (celda 30)
         df_final = replace_sentinels_with_null(self.spark, df_final)
         df_final = decimals_to_double(self.spark, df_final)
 
@@ -533,19 +529,6 @@ class UniversoImplementacion:
         # (E) Caps del modelo cap_24 (celda 3/31)
         df_final = apply_caps_xgb_cap24(df_final)
 
-        # (F) Transformaciones log (celda 32)
-        for c in [
-            "mto_deu_mora_sol_u48_o",
-            "pos_tkt_trx_com_sol_p_000_ooo",
-            "rcc_mto_deu_ind_pj_pr_000_o",
-            "rcc_mto_gar_ope_cre_o",
-        ]:
-            df_final = df_final.withColumn(
-                c + "_ln",
-                F.when(F.col(c).isNotNull(), F.log1p(F.col(c))),
-            )
-
-        # (G) Selección final (contrato del modelo)
         df_final = df_final.withColumnRenamed("NUM_PROD_PER", "num_prod_per")
         df_final = df_final.select(*self.mt_final_cols)
 
