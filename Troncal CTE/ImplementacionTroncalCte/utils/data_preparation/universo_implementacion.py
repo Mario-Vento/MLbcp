@@ -168,14 +168,13 @@ class UniversoImplementacion:
         # ---------------------------------------------------------------------
         self.mt_final_cols = [
             # llaves / metadata
-            'codmes',
             'codclavepartycli',
             'codclaveunicocli',
             'codinternocomputacional',
             'flgclictavalida',
             'mtosaldocapitalsol',
             'num_prod_per',
-            # features modelo (nombres SAS)
+            # 24 features del modelo cap_24
             'ctdmora_intra_0_o',
             'max_maduracion_cli',
             'max_mora_intra_u6m_o',
