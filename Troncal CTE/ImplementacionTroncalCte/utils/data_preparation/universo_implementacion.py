@@ -168,6 +168,7 @@ class UniversoImplementacion:
         # ---------------------------------------------------------------------
         self.mt_final_cols = [
             # llaves / metadata
+            'codmes',
             'codclavepartycli',
             'codclaveunicocli',
             'codinternocomputacional',
