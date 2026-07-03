@@ -172,10 +172,15 @@ class UniversoImplementacion:
             'codclavepartycli',
             'codclaveunicocli',
             'codinternocomputacional',
+            'ctddiaatraso',
             'flgclictavalida',
             'mtosaldocapitalsol',
-            'num_prod_per',
-            # 24 features del modelo cap_24
+            'flg_tc',
+            'flg_tc_personas',
+            'flg_cef',
+            'flg_veh',
+            'flg_hip',
+            # 24 features del modelo cap_24 (nombres SAS, orden de importancia)
             'ctdmora_intra_0_o',
             'max_maduracion_cli',
             'max_mora_intra_u6m_o',
@@ -184,21 +189,21 @@ class UniversoImplementacion:
             'fatc_pct_pag_mn_ctami_000_o',
             'rcc_pct_sf3_sf24_ship_000',
             'rcc_pct_rdv_prm_u3m_ooo',
+            'rcc_q_mes_act_sf_buen_000',
             'prd_prm_tsav_mnn_6_6_rt6_ooo',
             'flg_titulo',
             'q_diamora_max_100_u24_o',
             'fatc_flg_pag_ful_clan_000',
             'rcc_pct_sf12_sf24_rt_u24',
             'edad_o',
-            'rcc_q_mes_act_sf_buen_000',
-            'max_mora_intra_g3m',
-            'ctdpdhu24_ooo',
             'pos_pct_q_etcnpscl_a__000',
+            'ctdpdhu24_ooo',
             'grf_tip_clas_rie_cli__000',
             'isav_q_opea_desm_prm_u3m_o',
-            'rcc_mto_deu_ship_max__000',
             'grf_cvta_prov_rie4_pr_000',
             'prod_flg_sld_aho_300',
+            'rcc_mto_deu_ship_max__000',
+            'max_mora_intra_g3m',
             'q_mes_mto_tot_pgsrv_s_000',
         ]
 
@@ -279,18 +284,18 @@ class UniversoImplementacion:
             F.coalesce(F.max(F.when(F.col("flgctavalida") == "1", F.col("ctddiaatraso"))), F.lit(0)).alias("ctddiaatraso"),
             F.coalesce(F.max(F.when(F.col("flgctavalida") == "1", F.col("ctdmesmaduracion"))), F.lit(0)).alias("max_maduracion_cli"),
             F.coalesce(F.sum(F.when(F.col("flgctavalida") == "1", F.col("mtosaldocapitalsol"))), F.lit(0)).alias("mtosaldocapitalsol"),
-            F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_rev, F.lit(1))), F.lit(0)).alias("FLG_TC"),
-            F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_rev, F.col("flgtarjetacreditoper"))), F.lit(0)).cast("int").alias("FLG_TC_PERSONAS"),
-            F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_cef, F.lit(1))), F.lit(0)).alias("FLG_CEF"),
-            F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_veh, F.lit(1))), F.lit(0)).alias("FLG_VEH"),
-            F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_hip, F.lit(1))), F.lit(0)).alias("FLG_HIP"),
+            F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_rev, F.lit(1))), F.lit(0)).alias("flg_tc"),
+            F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_rev, F.col("flgtarjetacreditoper"))), F.lit(0)).cast("int").alias("flg_tc_personas"),
+            F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_cef, F.lit(1))), F.lit(0)).alias("flg_cef"),
+            F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_veh, F.lit(1))), F.lit(0)).alias("flg_veh"),
+            F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_hip, F.lit(1))), F.lit(0)).alias("flg_hip"),
         )
 
         df_porto = df_porto.dropDuplicates(["codclaveunicocli", "codmes"])
         df_porto = df_porto.withColumn("fec_update", F.current_timestamp())
         df_porto = df_porto.withColumn(
             "NUM_PROD_PER",
-            col("FLG_TC_PERSONAS") + col("FLG_CEF") + col("FLG_VEH") + col("FLG_HIP"),
+            col("flg_tc_personas") + col("flg_cef") + col("flg_veh") + col("flg_hip"),
         )
 
         df_porto.persist(StorageLevel.MEMORY_AND_DISK)
