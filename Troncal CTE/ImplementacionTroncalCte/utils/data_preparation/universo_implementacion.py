@@ -65,12 +65,6 @@ DICT_NAMES_SAS = {
 # Capa de alias: nombre de columna FUENTE -> nombre de modelo (ArnoldNotebook celda 18)
 # Solo se listan las que difieren; el resto de columnas fuente ya coinciden.
 SOURCE_TO_MODEL = {
-    # --- mora intra (hm_clientemoraintrames) ---
-    "ctdnivmoracli": "ctdmora_intra_0",
-    "ctdmaxatrasou3m": "max_mora_intra_u3m",
-    "ctdmaxatrasop3m": "max_mora_intra_p3m",
-    "ctdmaxatrasou6m": "max_mora_intra_u6m",
-    # --- resto de fuentes ---
     "prod_pct_pmpas_pmact_24_24_rt_u24": "prd_pct_pmpas_pmact_24_24_rt24",
     "prod_mto_sld_prm_tsav_min_6_6_rt_u6m": "prd_prm_tsav_mnn_6_6_rt6",
     "fatc_pct_pag_min_ctamin_u6m_rt_u6m": "fatc_pct_pag_mn_ctamin_u6m_rtu6",
@@ -131,7 +125,7 @@ class UniversoImplementacion:
         sink_schema: str,
         sink_table_portafolio_troncal: str,
         sink_table_hm_atraso: str,
-        path_mora_intrames: str = "catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_clientemoraintrames",
+        #path_mora_intrames: str = "catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_clientemoraintrames",
         verbosity: bool = True,
     ):
         self.spark = spark
@@ -143,7 +137,8 @@ class UniversoImplementacion:
         self.path_table_portfolio_troncal = f"{sink_catalog}.{sink_schema}.{sink_table_portafolio_troncal}"
         self.v_path_portfolio = f"{src_catalog}.{src_schema_portafolio}.{src_table_portafolio}"
         # Fuente de mora intramés (ahora parametrizable)
-        self.path_mora_intrames = path_mora_intrames
+        #self.path_mora_intrames = path_mora_intrames
+        self.path_table_hm_atraso = f"{sink_catalog}.{sink_schema}.{sink_table_hm_atraso}"
 
         # Filtros de productos y sub-productos
         self.v_list_prod_no_rev = ['CONSUMO', 'HIPOTECARIO']
@@ -210,7 +205,7 @@ class UniversoImplementacion:
     def execute(self):
         print(f"Mes inicio      : {self.codmes_ini}")
         print(f"Portafolio fuente  : {self.v_path_portfolio}")
-        print(f"Mora intramés (desde 01) : {self.path_mora_intrames}")
+        #print(f"Mora intramés (desde 01) : {self.path_mora_intrames}")
         print(f"Tabla destino    : {self.path_table_portfolio_troncal}")
 
         # =====================================================================
@@ -281,9 +276,10 @@ class UniversoImplementacion:
             F.max(F.trim(F.col("codinternocomputacional"))).alias("codinternocomputacional"),
             F.coalesce(F.max(F.col("codclaveunicocli")), F.lit(None)).alias("codclaveunicocli"),
             F.coalesce(F.max(F.when(F.col("flgctavalida") == "1", F.lit(1))), F.lit(0)).alias("flgclictavalida"),
-            F.coalesce(F.max(F.when(F.col("flgctavalida") == "1", F.col("ctddiaatraso"))), F.lit(0)).alias("ctddiaatraso"),
+            F.coalesce(F.max(F.col("ctddiaatraso")), F.lit(0)).alias("ctddiaatraso"),
             F.coalesce(F.max(F.when(F.col("flgctavalida") == "1", F.col("ctdmesmaduracion"))), F.lit(0)).alias("max_maduracion_cli"),
-            F.coalesce(F.sum(F.when(F.col("flgctavalida") == "1", F.col("mtosaldocapitalsol"))), F.lit(0)).alias("mtosaldocapitalsol"),
+            F.coalesce(F.sum(F.when((F.col("flgctavalida") == "1") & (F.col("mtosaldocapitalsol") > 0),
+                                    F.col("mtosaldocapitalsol"))), F.lit(0)).alias("mtosaldocapitalsol"),
             F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_rev, F.lit(1))), F.lit(0)).alias("flg_tc"),
             F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_rev, F.col("flgtarjetacreditoper"))), F.lit(0)).cast("int").alias("flg_tc_personas"),
             F.coalesce(F.max(F.when((F.col("flgctavalida") == "1") & self.v_flg_cef, F.lit(1))), F.lit(0)).alias("flg_cef"),
@@ -438,12 +434,12 @@ class UniversoImplementacion:
                 ],
                 "codclavepartycli", +1, "df_nivel_educativo",
             ),
-            # 19. Mora intramés (ahora trae las pre-agregadas u3m/p3m/u6m + nivel)
-            (
-                f"{self.path_mora_intrames}",
-                ["ctdnivmoracli", "ctdmaxatrasou3m", "ctdmaxatrasop3m", "ctdmaxatrasou6m"],
-                "codclavepartycli", 0, "df_mora_intrames",
-            ),
+            # 19. Mora intramés (pre-agregadas u3m/p3m/u6m + nivel)
+            # (
+            #     f"{self.path_mora_intrames}",
+            #     ["ctdnivmoracli", "ctdmaxatrasou3m", "ctdmaxatrasop3m", "ctdmaxatrasou6m"],
+            #     "codclavepartycli", 0, "df_mora_intrames",
+            # ),
         ]
 
         print("=" * 60)
@@ -471,6 +467,19 @@ class UniversoImplementacion:
                 JOIN_KEYS, "left",
             )
 
+        # --- Mora intramés: 6 fotos mensuales desde FuenteHmAtrasoIntra ---
+        hm = (self.spark.table(self.path_table_hm_atraso)
+              .select("codmes", F.trim(F.col("codclavepartycli")).alias("codclavepartycli"), "ctdmoraintr"))
+        for k in range(6):
+            hm_k = (hm
+                .withColumn("codmes", F.date_format(
+                    F.add_months(F.to_date(F.col("codmes").cast("string"), "yyyyMM"), k),
+                    "yyyyMM").cast("int"))
+                .select("codmes", "codclavepartycli",
+                        F.col("ctdmoraintr").alias(f"ctdmora_intra_{k}"))
+                .dropDuplicates(["codmes", "codclavepartycli"]))
+            df_final = df_final.join(hm_k, ["codmes", "codclavepartycli"], "left")
+
         # =====================================================================
         # 4. CAPA DE MODELO
         # =====================================================================
@@ -493,6 +502,10 @@ class UniversoImplementacion:
             .when(F.col("dem_fec_nacimiento") > ref_date, F.lit(None).cast("int"))
             .otherwise(F.floor(F.months_between(ref_date, F.col("dem_fec_nacimiento")) / F.lit(12))),
         ).drop("dem_fec_nacimiento")
+
+        df_final = df_final.withColumn("max_mora_intra_u3m", F.greatest("ctdmora_intra_0", "ctdmora_intra_1", "ctdmora_intra_2"))
+        df_final = df_final.withColumn("max_mora_intra_p3m", F.greatest("ctdmora_intra_3", "ctdmora_intra_4", "ctdmora_intra_5"))
+        df_final = df_final.withColumn("max_mora_intra_u6m", F.greatest("max_mora_intra_u3m", "max_mora_intra_p3m"))
 
         # --- max_mora_intra_g3m = ratio u3m/p3m (celda 26) ---
         df_final = df_final.withColumn(

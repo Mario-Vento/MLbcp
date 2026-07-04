@@ -29,7 +29,7 @@ def get_dataprep_config(periodo: str):
         "src_schema_portafolio": "bcp_ddv_adrmmgr_seginfobasesgenerales_vu",
         "src_table_portafolio": "hm_portafoliocredito",
         "sink_table_portafolio_troncal": "bhv_troncal_cliente_base",
-        "path_mora_intrames": "catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_clientemoraintrames",
+        #"path_mora_intrames": "catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_clientemoraintrames",
     }
 
     return config

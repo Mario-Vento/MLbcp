@@ -98,15 +98,14 @@ def join_variable_table(
 def replace_sentinels_with_null(spark, df, sentinels=None):
     """
     Reemplaza valores centinela por null en todas las columnas numéricas.
-    IDÉNTICA a Arnold_UTILS. La lista por defecto incluye 99999 y NO incluye
-    44444444444 (ese caso — u3m y p3m ambos null — se conserva a propósito).
+    IDÉNTICA a Arnold_UTILS.
     """
     if sentinels is None:
         sentinels = (
             1111111111, -1111111111,
             2222222222, -2222222222,
             3333333333, -3333333333,
-            4444444444,
+            4444444444, 44444444444,
             5555555555,
             6666666666,
             7777777777,
