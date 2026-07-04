@@ -125,8 +125,8 @@ class UniversoImplementacion:
         sink_schema: str,
         sink_table_portafolio_troncal: str,
         sink_table_hm_atraso: str,
-        #path_mora_intrames: str = "catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_clientemoraintrames",
         verbosity: bool = True,
+        #path_mora_intrames: str = "catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_clientemoraintrames",
     ):
         self.spark = spark
         self.codmes_ini = int(codmes_ini)
