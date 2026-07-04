@@ -131,7 +131,7 @@ class UniversoImplementacion:
         sink_schema: str,
         sink_table_portafolio_troncal: str,
         sink_table_hm_atraso: str,
-        path_mora_intrames: str = "catalog_lhcl_prod.bcp.bcp_ddv_adrmmgr_videsvariablesmodelos_vu.hm_clientemoraintrames",
+        path_mora_intrames: str = "catalog_lhcl_prod.bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_clientemoraintrames",
         verbosity: bool = True,
     ):
         self.spark = spark
