@@ -320,7 +320,7 @@ class UniversoImplementacion:
         VARIABLE_TABLES = [
             # 1. PDH RBM
             (
-                "catalog_cem_expl_bcp_prod.bcp_expl_mmgr_mlde.hm_calculomarcaingresopdhrbm_mlops",
+                "catalog_cemm_expl_bcp_prod.bcp_expl_mmgr_mlde.hm_calculomarcaingresopdhrbm_mlops",
                 ["ctdpdhu24"],
                 "codclavepartycli", 0, "pdhrbm",
             ),
