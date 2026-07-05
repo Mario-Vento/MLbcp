@@ -548,6 +548,20 @@ class UniversoImplementacion:
         df_final = apply_caps_xgb_cap24(df_final)
 
         df_final = df_final.withColumnRenamed("NUM_PROD_PER", "num_prod_per")
+
+        # (F) Alineación de tipos con la tabla de referencia SAS (requisito de certificación)
+        TYPE_ALIGN = {
+            "codmes": "double",
+            "ctddiaatraso": "double",
+            "flgclictavalida": "double",
+            "max_maduracion_cli": "double",
+            "q_mes_mto_tot_pgsrv_s_000": "double",
+            "rcc_q_mes_act_sf_buen_000": "double",
+            "mtosaldocapitalsol": "decimal(33,6)",
+        }
+        for c, t in TYPE_ALIGN.items():
+            df_final = df_final.withColumn(c, F.col(c).cast(t))
+        
         df_final = df_final.select(*self.mt_final_cols)
 
         print(f"✅ df_final construido con {len(df_final.columns)} columnas")
