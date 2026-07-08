@@ -469,7 +469,7 @@ class UniversoImplementacion:
             .filter(F.col("codmes") == self.codmes_data)
             .select(
                 F.col("codclaveunicocli"),
-                F.col("ctdmesantiguedadempsunat").cast(IntegerType())
+                F.col("ctdmesantiguedademp").cast(IntegerType())
                  .alias("MOD_DEMO__ctdmesantiguedadempsunat"),
             )
             .distinct()
