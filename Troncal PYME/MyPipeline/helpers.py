@@ -49,11 +49,11 @@ def _mes_anterior(codmes: int) -> int:
 # HELPER: generar lista de meses YYYYMM entre dos fechas
 # Extraído de notebook Recableo de Variables de Modeladora Sherly
 # =============================================================================
-    def _generar_meses(mes_inicio, mes_fin):
-    meses = []
-    fecha_fin = datetime.strptime(str(mes_fin), "%Y%m")
-    fecha_actual = datetime.strptime(str(mes_inicio), "%Y%m")
-    while fecha_actual <= fecha_fin:
-        meses.append(fecha_actual.strftime("%Y%m"))
-        fecha_actual += relativedelta(months=1)
-    return meses
+def _generar_meses(mes_inicio, mes_fin):
+meses = []
+fecha_fin = datetime.strptime(str(mes_fin), "%Y%m")
+fecha_actual = datetime.strptime(str(mes_inicio), "%Y%m")
+while fecha_actual <= fecha_fin:
+    meses.append(fecha_actual.strftime("%Y%m"))
+    fecha_actual += relativedelta(months=1)
+return meses
