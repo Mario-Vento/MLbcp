@@ -276,7 +276,7 @@ class UniversoImplementacion:
             F.max(F.trim(F.col("codinternocomputacional"))).alias("codinternocomputacional"),
             F.coalesce(F.max(F.col("codclaveunicocli")), F.lit(None)).alias("codclaveunicocli"),
             F.coalesce(F.max(F.when(F.col("flgctavalida") == "1", F.lit(1))), F.lit(0)).alias("flgclictavalida"),
-            F.coalesce(F.max(F.col("ctddiaatraso")), F.lit(0)).alias("ctddiaatraso"),
+            F.coalesce(F.max(F.when(F.col("flgctavalida") == "1", F.col("ctddiaatraso"))), F.lit(0)).alias("ctddiaatraso"),
             F.coalesce(F.max(F.when(F.col("flgctavalida") == "1", F.col("ctdmesmaduracion"))), F.lit(0)).alias("max_maduracion_cli"),
             F.coalesce(F.sum(F.when((F.col("flgctavalida") == "1") & (F.col("mtosaldocapitalsol") > 0),
                                     F.col("mtosaldocapitalsol"))), F.lit(0)).alias("mtosaldocapitalsol"),
