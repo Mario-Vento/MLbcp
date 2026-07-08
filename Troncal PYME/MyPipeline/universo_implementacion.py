@@ -15,10 +15,10 @@ from dateutil.relativedelta import relativedelta
 
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql import functions as F
-from pyspark.sql.types import IntegerType, DecimalType, DoubleType
+from pyspark.sql.types import IntegerType, DecimalType, DoubleType, StringType
 from pyspark.sql.functions import udf, array
-
-from utils.data_preparation.helpers import add_codmes_spark, operacionesMaxBetweenCols_udf, _mes_anterior
+from pyspark.sql.window import Window
+from utils.data_preparation.helpers import add_codmes_spark, operacionesMaxBetweenCols_udf, _mes_anterior, _generar_meses
 
 # ---------------------------------------------------------------------------
 # Lista de dummies a reemplazar por NULL (estándar BCP)
@@ -150,7 +150,7 @@ class UniversoImplementacion:
 
         # 3. Lectura de tablas de variables troncales
         df_mod_demo            = self._read_mod_demo()
-        df_mod_act             = self._read_mod_act()
+        df_mod_act             = self._read_mod_act(df_universo)
         df_videvar_mora_pond   = self._read_videvar_mora_pond()
         df_pasivo_evol_sald    = self._read_pasivo_evol_sald()
         df_mtx_rcc_otra_deuda  = self._read_mtx_rcc_otra_deuda()
@@ -460,27 +460,141 @@ class UniversoImplementacion:
         return df.withColumn("codmes", F.lit(self.codmes).cast(IntegerType()))
 
     def _read_mod_demo(self) -> DataFrame:
-        return self._read_with_offset(
-            table=f"{self.src_catalog}.bcp_ddv_rbmbcapym_apppyme_vu.hm_scoreappbasepymemodulodemografico",
-            key_col="codclaveunicocli",
-            cols={"ctdmesantiguedadempsunat": "MOD_DEMO__ctdmesantiguedadempsunat"},
-        )
-
-    def _read_mod_act(self) -> DataFrame:
+        """RECABLEO: ctdmesantiguedadempsunat desde hm_contribuyentesunatpyme
+        (ya NO lee de hm_scoreappbasepymemodulodemografico)."""
         df = (
             self.spark.table(
-                f"{self.src_catalog}.bcp_ddv_rbmbcapym_apppyme_vu.hm_scoreappbasepymemoduloactivo"
+                f"{self.src_catalog}.bcp_ddv_rbmbcapym_modelogestion_vu.hm_contribuyentesunatpyme"
             )
             .filter(F.col("codmes") == self.codmes_data)
             .select(
-                "codclaveunicocli",
-                F.col("pctratiomtodecdeudapymertmtopasivoprmu3m").alias("MOD_ACT__pctratiomtodecdeudapymertmtopasivoprmu3m"),
-                F.col("pctratiomtoopeaprmu6mopecprmu12").alias("MOD_ACT__pctratiomtoopeaprmu6mopecprmu12"),
-                F.col("isav_mto_opea_estvta_pym_u6m_rt_max_u12").alias("MOD_ACT__isav_mto_opea_estvta_pym_u6m_rt_max_u12"),
+                F.col("codclaveunicocli"),
+                F.col("ctdmesantiguedadempsunat").cast(IntegerType())
+                 .alias("MOD_DEMO__ctdmesantiguedadempsunat"),
             )
             .distinct()
         )
         return df.withColumn("codmes", F.lit(self.codmes).cast(IntegerType()))
+
+    def _read_mod_act(self, df_universo: DataFrame) -> DataFrame:
+        """RECABLEO MOD_ACT desde fuentes originales (ya NO lee de
+        hm_scoreappbasepymemoduloactivo). Réplica del notebook de Sherly."""
+        cd = self.codmes_data                                  # mes data (proceso - 1)
+        c3 = _mes_anterior(_mes_anterior(cd))                  # cd - 2 (prom. 3 meses)
+        c4 = _mes_anterior(c3)                                 # cd - 3 (inicio ventana)
+
+        # UNIVERSO MÓDULO ACTIVO: flgactmay100may6u12 = 1
+        universo_segmento = (
+            self.spark.table(
+                f"{self.src_catalog}.bcp_ddv_rbmbcapym_segmentacionpyme_vu.hm_segmentoinformativopyme"
+            )
+            .filter((F.col("codmes") == cd) & (F.col("flgactmay100may6u12") == 1))
+            .select(F.col("codclaveunicocli")).distinct()
+            .withColumn("en_universo", F.lit(1))
+        )
+
+        # CAMPOS 1 y 3: ratios de transacciones
+        transacciones = (
+            self.spark.table(
+                f"{self.src_catalog}.bcp_ddv_rbmbcapym_apppyme_vu.hm_matrizbasepasivoclienteapppyme"
+            )
+            .filter(F.col("codmes") == cd)
+            .select(
+                F.col("codclavepartycli"),
+                (F.col("ISAV_MTO_OPEA_ESTVTA_PYM_PRM_U6M") /
+                 F.col("ISAV_MTO_OPEA_ESTVTA_PYM_MAX_U12"))
+                    .alias("isav_rt_max_u12_raw"),
+                (F.col("ISAV_MTO_OPEA_ESTVTA_PYM_PRM_U6M") /
+                 F.col("ISAV_MTO_OPEC_ESTVTA_PYM_PRM_U12"))
+                    .alias("pctratio_opea_opec_raw"),
+            )
+        )
+
+        # CAMPO 2 (numerador): variación decreciente de deuda, portafolio c4..cd
+        portafolio_agrupado = (
+            self.spark.table(
+                f"{self.src_catalog}.bcp_ddv_adrmmgr_seginfobasesgenerales_vu.hm_portafoliocredito"
+            )
+            .filter(
+                (F.col("codmes").between(c4, cd)) &
+                (F.trim(F.col("flgctavalida")) == "1") &
+                (F.col("tipestadocta").isin("A", "AC", "D"))
+            )
+            .groupBy("codclavepartycli", "codmes")
+            .agg(F.sum("mtosaldocapitalsol").alias("saldo_tmp"))
+        )
+
+        lista_meses = _generar_meses(c4, cd)
+        df_meses = (
+            self.spark.createDataFrame(lista_meses, StringType())
+            .select(F.col("value").cast(IntegerType()).alias("codmes"))
+        )
+        partys = portafolio_agrupado.select("codclavepartycli").dropDuplicates()
+        cross = partys.crossJoin(F.broadcast(df_meses))
+        portafolio_completo = portafolio_agrupado.join(
+            cross, on=["codmes", "codclavepartycli"], how="right_outer"
+        )
+
+        w = Window.partitionBy("codclavepartycli").orderBy(F.col("codmes").desc())
+        portafolio_var = (
+            portafolio_completo
+            .withColumn("saldo_prev", F.lead("saldo_tmp", 1).over(w).cast("double"))
+            .withColumn(
+                "var_dec",
+                F.when(F.col("saldo_tmp").isNull() & F.col("saldo_prev").isNull(), F.lit(None))
+                 .otherwise(
+                     F.when(F.coalesce(F.col("saldo_tmp"), F.lit(0)) -
+                            F.coalesce(F.col("saldo_prev"), F.lit(0)) > 0, F.lit(0))
+                      .otherwise(F.abs(F.coalesce(F.col("saldo_tmp"), F.lit(0)) -
+                                       F.coalesce(F.col("saldo_prev"), F.lit(0))))
+                 ),
+            )
+        )
+        dec_var_prm3 = (
+            portafolio_var
+            .filter(F.col("codmes").between(c3, cd))
+            .groupBy("codclavepartycli")
+            .agg(F.avg("var_dec").alias("dec_var_prm3"))
+        )
+
+        # CAMPO 2 (denominador): pasivos
+        pasivos = (
+            self.spark.table(
+                f"{self.src_catalog}.bcp_ddv_rbmbcapym_apppyme_vu.hm_matrizbaseresumensaldoapppyme"
+            )
+            .filter(F.col("codmes") == cd)
+            .select("codclaveunicocli", "PROD_MTO_SLD_PRM_VIG_PAS_AHO_CTEORD_PRM_U3M")
+        )
+
+        # ENSAMBLE sobre el universo (tiene ambas claves, igual que el bd de Sherly)
+        base = (
+            df_universo.select("codclaveunicocli", "codclavepartycli").distinct()
+            .join(universo_segmento, "codclaveunicocli", "left")
+            .join(transacciones, "codclavepartycli", "left")
+            .join(dec_var_prm3, "codclavepartycli", "left")
+            .join(pasivos, "codclaveunicocli", "left")
+            .withColumn(
+                "pctratio_deuda_pasivo_raw",
+                F.col("dec_var_prm3") /
+                F.col("PROD_MTO_SLD_PRM_VIG_PAS_AHO_CTEORD_PRM_U3M"),
+            )
+        )
+
+        # REGLA: fuera del universo del módulo -> NULL
+        resultado = base.select(
+            F.col("codclaveunicocli"),
+            F.when(F.col("en_universo") == 1, F.col("isav_rt_max_u12_raw"))
+             .otherwise(F.lit(None)).cast(DecimalType(19, 8))
+             .alias("MOD_ACT__isav_mto_opea_estvta_pym_u6m_rt_max_u12"),
+            F.when(F.col("en_universo") == 1, F.col("pctratio_deuda_pasivo_raw"))
+             .otherwise(F.lit(None)).cast(DecimalType(19, 8))
+             .alias("MOD_ACT__pctratiomtodecdeudapymertmtopasivoprmu3m"),
+            F.when(F.col("en_universo") == 1, F.col("pctratio_opea_opec_raw"))
+             .otherwise(F.lit(None)).cast(DecimalType(19, 8))
+             .alias("MOD_ACT__pctratiomtoopeaprmu6mopecprmu12"),
+        ).distinct()
+
+        return resultado.withColumn("codmes", F.lit(self.codmes).cast(IntegerType()))
 
     def _read_videvar_mora_pond(self) -> DataFrame:
         return self._read_with_offset(
