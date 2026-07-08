@@ -1,8 +1,13 @@
 APP,TABLA,CAMPO,DESFASE
-LHCL, catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_seginfobasesgenerales_vu.hm_portafoliocredito, codmes, 0
-LHCL, catalog_lhcl_prod_bcp.bcp_ddv_rbmbcapym_apppyme_vu.hm_scorepreaprobacionapppyme, codmes, -1
-LHCL, catalog_lhcl_prod_bcp.bcp_ddv_rbmbcapym_apppyme_vu.hm_scoreappbasepymemodulodemografico, codmes, -1
-LHCL, catalog_lhcl_prod_bcp.bcp_ddv_rbmbcapym_apppyme_vu.hm_scoreappbasepymemoduloactivo, codmes, -1
+catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_seginfobasesgenerales_vu.hm_portafoliocredito, codmes, 0
+LHCL, catalog_lhcl_prod_bcp.bcp_ddv_rbmbcapym_modelogestion_vu.hm_clienteprospectopyme, codmes, -1
+LHCL, catalog_lhcl_prod_bcp.bcp_ddv_rbmbcapym_apppyme_vu.hm_relacionadoapppyme, codmes, -1
+LHCL, catalog_lhcl_prod_bcp.bcp_ddv_rbmbcapym_apppyme_vu.hm_clientepreaprobacionapppyme, codmes, -1
+LHCL, catalog_lhcl_prod_bcp.bcp_ddv_rbmbcapym_apppyme_vu.hm_variablerccmaterialidadapppyme, codmes, -1
+LHCL, catalog_lhcl_prod_bcp.bcp_ddv_rbmbcapym_modelogestion_vu.hm_contribuyentesunatpyme, codmes, -1
+LHCL, catalog_lhcl_prod_bcp.bcp_ddv_rbmbcapym_segmentacionpyme_vu.hm_segmentoinformativopyme, codmes, -1
+LHCL, catalog_lhcl_prod_bcp.bcp_ddv_rbmbcapym_apppyme_vu.hm_matrizbasepasivoclienteapppyme, codmes, -1
+LHCL, catalog_lhcl_prod_bcp.bcp_ddv_rbmbcapym_apppyme_vu.hm_matrizbaseresumensaldoapppyme, codmes, -1
 LHCL, catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_matrizmoraponderadaclientemmgr, codmes, -1
 LHCL, catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_variablepasivoevolucionsaldopyme, codmes, -1
 LHCL, catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_variableactivoevolucionclientepyme, codmes, 0
