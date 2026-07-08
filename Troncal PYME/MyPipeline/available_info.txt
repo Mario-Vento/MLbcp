@@ -1,5 +1,5 @@
 APP,TABLA,CAMPO,DESFASE
-catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_seginfobasesgenerales_vu.hm_portafoliocredito, codmes, 0
+LHCL, catalog_lhcl_prod_bcp.bcp_ddv_adrmmgr_seginfobasesgenerales_vu.hm_portafoliocredito, codmes, 0
 LHCL, catalog_lhcl_prod_bcp.bcp_ddv_rbmbcapym_modelogestion_vu.hm_clienteprospectopyme, codmes, -1
 LHCL, catalog_lhcl_prod_bcp.bcp_ddv_rbmbcapym_apppyme_vu.hm_relacionadoapppyme, codmes, -1
 LHCL, catalog_lhcl_prod_bcp.bcp_ddv_rbmbcapym_apppyme_vu.hm_clientepreaprobacionapppyme, codmes, -1
