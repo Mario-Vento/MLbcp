@@ -1,0 +1,17 @@
+APP,TABLA,CAMPO,DESFASE
+LHCL, catalog_lhcl_prod.bcp.bcp_ddv_adrmmgr_seginfobasesgenerales_vu.hm_portafoliocredito, codmes, 0
+LHCL, catalog_lhcl_prod.bcp.bcp_ddv_rbmbcapym_apppyme_vu.hm_scorepreaprobacionapppyme, codmes, -1
+LHCL, catalog_lhcl_prod.bcp.bcp_ddv_rbmbcapym_apppyme_vu.hm_scoreappbasepymemodulodemografico, codmes, -1
+LHCL, catalog_lhcl_prod.bcp.bcp_ddv_rbmbcapym_apppyme_vu.hm_scoreappbasepymemoduloactivo, codmes, -1
+LHCL, catalog_lhcl_prod.bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_matrizmoraponderadaclientemmg, codmes, -1
+LHCL, catalog_lhcl_prod.bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_variablepasivoevolucionsaldopyme, codmes, -1
+LHCL, catalog_lhcl_prod.bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_variableactivoevolucionclientepyme, codmes, 0
+LHCL, catalog_lhcl_prod.bcp.bcp_ddv_adrmmgr_videavariablesmodelos_vu.hm_clasificacionclientenivelexperienciapyme, codmes, 0
+LHCL, catalog_lhcl_prod.bcp.bcp_ddv_matrizvariables_vu.hm_matrizresumensaldoactivo pasivo, codmes, 0
+LHCL, catalog_lhcl_prod.bcp.bcp_ddv_matrizvariables_vu.hm_matrizresumensaldo, codmes, 0
+LHCL, catalog_lhcl_prod.bcp.bcp_ddv_matrizvariables_vu.hm_matrizmovimientocargopasivo, codmes, 0
+LHCL, catalog_lhcl_prod.bcp.bcp_ddv_matrizvariables_vu.hm_matrizmovimientoabonopasivo, codmes, 0
+LHCL, catalog_lhcl_prod.bcp.bcp_ddv_matrizvariables_vu.hm_matriztransaccioncanal, codmes, 0
+LHCL, catalog_lhcl_prod.bcp.bcp_ddv_matrizvariables_vu.hm_matriztransaccioncanalpago transferencia, codmes, 0
+LHCL, catalog_lhcl_prod.bcp.bcp_ddv_matrizvariables_vu.hm_matrizdeudorrccproducto, codmes, 0
+LHCL, catalog_lhcl_prod.bcp.bcp_ddv_matrizvariables_vu.hm_matrizdeudorrccotradeuda, codmes, 0
