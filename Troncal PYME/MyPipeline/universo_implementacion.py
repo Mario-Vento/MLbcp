@@ -5,7 +5,7 @@
 #
 # Basado en los notebooks de Sherly:
 #   - 10_Score_BHV_Troncal (construcción del universo y joins de variables)
-#   - 10_Recableo_variables_score (construcción de hm_scorepreaprobacionapppyme)
+#   - 10_Recableo_variables_score (Recableo de tablas con prefijo "SCORE")
 #
 # El codmes_data (mes de las tablas fuente sin desfase) = codmes - 1 mes.
 
